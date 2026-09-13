@@ -1,13 +1,14 @@
 --[[
     ========================================================
-    STEAL AN EGG - LENNON HUB BEST EGG SYSTEM (V7 DEFINITIVO)
-    Descubierto mediante el Developer Console de joseacd1:
-    - DETECCIÓN DE HASHES UUID: Los huevos reales son hashes de 32 caracteres
-      (ej: 414c405bbdba4a0c9484b8a08afd5eb6, 52f2017efbc...)
-    - EVASIÓN DE GUARDIAS: Al robar ("¡¡CORRE!!"), vuela de inmediato a 35 studs
-      de altura por el cielo directo a tu base para que los guardias del suelo nunca te alcancen
-    - CERO MUERTES: Vuelo aéreo inmune a trampas de oso y guardias
-    - CERO LAG: Escaneo optimizado sobre modelos con ProximityPrompt
+    STEAL AN EGG - LENNON HUB BEST EGG SYSTEM (V8 DEFINITIVO)
+    Descubierto con inspección directa del juego:
+    - RUTA REAL: Workspace.ClientRenderedAssets
+    - FILTRO DE BASE: Attr OwnerUserId o Nombre (UserId_UID)
+    - DATOS: BillboardGui.Data:
+        * DisplayName -> Nombre real (Holy Peacock, RazorFang, Rainbow Imp...)
+        * Odds / Rarity -> Rareza real (Cosmic, Secret, Eternal, Divine)
+        * PerSecond -> Multiplicador real ($360M/s, $54M/s -> 360M, 54M)
+    - ANTI-TRAMPAS & ANTI-GUARDIAS: Vuelo aéreo directo
     ========================================================
 ]]
 
@@ -16,10 +17,12 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
 
--- Eliminar versión previa
-if game:GetService("CoreGui"):FindFirstChild("LennonHubBestEgg") then
-    game:GetService("CoreGui").LennonHubBestEgg:Destroy()
-end
+-- Eliminar versión previa si existe
+pcall(function()
+    if game:GetService("CoreGui"):FindFirstChild("LennonHubBestEgg") then
+        game:GetService("CoreGui").LennonHubBestEgg:Destroy()
+    end
+end)
 
 -- Variables de Estado
 local teleguiadoActive = false
@@ -36,7 +39,7 @@ local selectedRarities = {
 
 local rarityColors = {
     ["Cosmic"] = Color3.fromRGB(138, 43, 226),   -- Púrpura
-    ["Secret"] = Color3.fromRGB(80, 80, 85),     -- Gris
+    ["Secret"] = Color3.fromRGB(80, 80, 85),     -- Gris / Plata
     ["Eternal"] = Color3.fromRGB(218, 24, 132),  -- Magenta
     ["Divine"] = Color3.fromRGB(255, 215, 0)     -- Dorado / Amarillo
 }
@@ -45,24 +48,12 @@ local currentEggs = {}
 local bestEgg = nil
 local myBasePosition = nil
 
--- Intentar localizar tu base automáticamente (joseacd1)
-local function findMyBase()
-    for _, plot in pairs(workspace:GetDescendants()) do
-        if string.find(string.lower(plot.Name), string.lower(LocalPlayer.Name)) then
-            local part = plot:IsA("BasePart") and plot or plot:FindFirstChildWhichIsA("BasePart")
-            if part then
-                myBasePosition = part.Position + Vector3.new(0, 5, 0)
-                break
-            end
-        end
-    end
-end
-pcall(findMyBase)
-
-local function parseValue(str)
-    if not str then return 0 end
-    local num = tonumber(string.match(str, "[%d%.]+")) or 0
-    local upper = string.upper(str)
+-- Helpers de conversión
+local function parseValue(valStr)
+    if not valStr then return 0 end
+    local num = tonumber(string.match(valStr, "[%d%.]+"))
+    if not num then return 0 end
+    local upper = string.upper(valStr)
     if string.find(upper, "B") then
         return num * 1000000000
     elseif string.find(upper, "M") then
@@ -76,107 +67,106 @@ end
 local function cleanValueString(str)
     if not str then return "25.0M" end
     local clean = string.match(str, "[%d%.]+[KMBkmb]")
-    return clean and string.upper(clean) or str
+    if clean then
+        return string.upper(clean)
+    end
+    local numOnly = string.match(str, "[%d%.]+")
+    return numOnly or str
 end
 
 -- ========================================================
--- 1. DETECTOR REAL DE HUEVOS (Por Hashes UUID y PlacedEggRenderer)
+-- 1. DETECTOR REAL DE HUEVOS (Vía Workspace.ClientRenderedAssets)
 -- ========================================================
 local function scanEggs()
     local found = {}
-    local scanned = {}
+    local myUserId = tostring(LocalPlayer.UserId)
+    local assets = workspace:FindFirstChild("ClientRenderedAssets")
     
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") and not scanned[obj] then
-            scanned[obj] = true
+    if assets then
+        for _, child in pairs(assets:GetChildren()) do
+            -- 1. Identificar dueño del huevo
+            local ownerId = child:GetAttribute("OwnerUserId")
+            if not ownerId then
+                local parts = string.split(child.Name, "_")
+                ownerId = parts[1]
+            end
+            ownerId = tostring(ownerId or "")
             
-            local prompt = obj
-            local promptParent = prompt.Parent
-            if promptParent then
-                local model = promptParent:IsA("Model") and promptParent or promptParent.Parent
-                
-                -- Verificar si el modelo o su padre es un Hash de 32 caracteres (PlacerEggRenderer)
-                local mName = model and model.Name or ""
-                local isHash = string.match(mName, "^%x%x%x%x%x%x%x%x") or (model.Parent and string.match(model.Parent.Name, "^%x%x%x%x%x%x%x%x"))
-                local promptAction = string.lower(prompt.ActionText or "")
-                local promptObject = prompt.ObjectText or ""
-                
-                -- Verificar si no es una máquina ni compra
-                local isBad = string.find(promptAction, "fuse") or string.find(promptAction, "buy") or string.find(promptAction, "open")
-                
-                if not isBad then
-                    -- Descartar si pertenece al jugador local (joseacd1)
-                    local isMyEgg = false
-                    local checkP = promptParent
-                    while checkP and checkP ~= workspace do
-                        if string.find(string.lower(checkP.Name), string.lower(LocalPlayer.Name)) then
-                            isMyEgg = true
-                            break
-                        end
-                        checkP = checkP.Parent
+            -- Detectar posición de mi propia base si encontramos nuestros huevos
+            if ownerId == myUserId then
+                local myCenter = child:FindFirstChild("CENTER") or child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
+                if myCenter then
+                    myBasePosition = myCenter.Position + Vector3.new(0, 5, 0)
+                end
+            else
+                -- Es un huevo enemigo disponible para robar
+                local dataGui = child:FindFirstChild("Data") or child:FindFirstChildWhichIsA("BillboardGui")
+                if dataGui then
+                    local nameLabel = dataGui:FindFirstChild("DisplayName")
+                    local oddsLabel = dataGui:FindFirstChild("Odds")
+                    local rarityLabel = dataGui:FindFirstChild("Rarity")
+                    local perSecLabel = dataGui:FindFirstChild("PerSecond")
+                    
+                    local petName = (nameLabel and nameLabel.Text ~= "") and nameLabel.Text or "Egg"
+                    
+                    -- Obtener rareza real
+                    local rawOdds = oddsLabel and oddsLabel.Text or ""
+                    local rawRarity = rarityLabel and rarityLabel.Text or ""
+                    local petRarity = "Cosmic"
+                    
+                    if rawOdds ~= "" then
+                        petRarity = rawOdds
+                    elseif rawRarity ~= "" then
+                        petRarity = rawRarity
                     end
                     
-                    if not isMyEgg then
-                        local petName = nil
-                        local detectedRarity = nil
-                        local detectedVal = nil
-                        
-                        -- 1. Si el prompt tiene ObjectText (ej: "Mantaris", "Koi")
-                        if promptObject ~= "" and not string.find(string.lower(promptObject), "part") and not string.find(string.lower(promptObject), "prompt") then
-                            petName = promptObject
+                    -- Normalizar rareza (Cosmic, Secret, Eternal, Divine)
+                    for rKey, _ in pairs(rarityColors) do
+                        if string.find(string.lower(petRarity), string.lower(rKey)) then
+                            petRarity = rKey
+                            break
                         end
-                        
-                        -- 2. Inspeccionar BillboardGui en el modelo
-                        local searchTarget = model or promptParent
-                        for _, label in pairs(searchTarget:GetDescendants()) do
-                            if label:IsA("TextLabel") and label.Visible then
-                                local txt = label.Text
-                                -- Buscar rareza
-                                for rName, _ in pairs(rarityColors) do
-                                    if string.find(string.lower(txt), string.lower(rName)) then
-                                        detectedRarity = rName
-                                    end
-                                end
-                                -- Buscar multiplicador
-                                if string.find(txt, "[%d%.]+[KMBkmb]") then
-                                    detectedVal = cleanValueString(txt)
-                                elseif string.len(txt) > 2 and not string.find(txt, "%d") and not detectedRarity and not petName then
-                                    petName = txt
+                    end
+                    
+                    local valText = perSecLabel and perSecLabel.Text or "$25M/s"
+                    local cleanVal = cleanValueString(valText)
+                    local numVal = parseValue(valText)
+                    
+                    -- Parte física para posicionarse
+                    local hitPart = child:FindFirstChild("CENTER") or child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
+                    
+                    -- ProximityPrompt para robar
+                    local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
+                    if not prompt and hitPart then
+                        -- Buscar en el pedestal o alrededores (a menos de 15 studs)
+                        for _, p in pairs(workspace:GetDescendants()) do
+                            if p:IsA("ProximityPrompt") and p.Parent and p.Parent:IsA("BasePart") then
+                                if (p.Parent.Position - hitPart.Position).Magnitude < 15 then
+                                    prompt = p
+                                    break
                                 end
                             end
                         end
-                        
-                        -- 3. Atributos de Roblox
-                        if not detectedRarity then
-                            for rName, _ in pairs(rarityColors) do
-                                if searchTarget:GetAttribute("Rarity") == rName or promptParent:GetAttribute("Rarity") == rName then
-                                    detectedRarity = rName
-                                end
-                            end
-                        end
-                        
-                        local finalRarity = detectedRarity or "Cosmic"
-                        local finalName = petName or (isHash and "Cosmic Egg" or searchTarget.Name)
-                        
-                        -- Limpieza de nombres genéricos
-                        if string.find(string.lower(finalName), "smartprompt") or string.find(string.lower(finalName), "part") or string.match(finalName, "^%x%x%x%x") then
-                            finalName = finalRarity .. " Egg"
-                        end
-                        
-                        if selectedRarities[finalRarity] then
-                            local hitPart = promptParent:IsA("BasePart") and promptParent or promptParent:FindFirstChildWhichIsA("BasePart") or promptParent
-                            if hitPart and hitPart:IsA("BasePart") then
-                                local numVal = parseValue(detectedVal)
-                                table.insert(found, {
-                                    name = finalName,
-                                    rarity = finalRarity,
-                                    valueStr = detectedVal or "25.0M",
-                                    numericValue = numVal > 0 and numVal or 25000000,
-                                    instance = hitPart,
-                                    prompt = prompt
-                                })
-                            end
-                        end
+                    end
+                    
+                    -- Buscar textura o imagen si existe
+                    local petImage = nil
+                    local decal = child:FindFirstChildWhichIsA("Decal", true)
+                    if decal and decal.Texture ~= "" then
+                        petImage = decal.Texture
+                    end
+                    
+                    -- Filtrar por las rarezas seleccionadas
+                    if selectedRarities[petRarity] and hitPart then
+                        table.insert(found, {
+                            name = petName,
+                            rarity = petRarity,
+                            valueStr = cleanVal,
+                            numericValue = numVal > 0 and numVal or 25000000,
+                            instance = hitPart,
+                            prompt = prompt,
+                            image = petImage
+                        })
                     end
                 end
             end
@@ -193,167 +183,115 @@ local function scanEggs()
 end
 
 -- ========================================================
--- 2. INTERFAZ GRÁFICA (IDÉNTICA A LENNON HUB)
+-- 2. CONSTRUCCIÓN DE INTERFAZ GRÁFICA (IDÉNTICA A LENNON HUB)
 -- ========================================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "LennonHubBestEgg"
 ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
-if syn and syn.protect_gui then
-    syn.protect_gui(ScreenGui)
-    ScreenGui.Parent = game:GetService("CoreGui")
-elseif gethui then
-    ScreenGui.Parent = gethui()
-else
-    ScreenGui.Parent = game:GetService("CoreGui")
+local targetGui = game:GetService("CoreGui")
+if gethui then
+    pcall(function() targetGui = gethui() end)
 end
+ScreenGui.Parent = targetGui
 
--- Botón Flotante a la izquierda (Slow Mode)
-local FloatingBtn = Instance.new("Frame")
-FloatingBtn.Size = UDim2.new(0, 110, 0, 36)
-FloatingBtn.Position = UDim2.new(0.04, 0, 0.52, 0)
-FloatingBtn.BackgroundColor3 = Color3.fromRGB(18, 20, 22)
-FloatingBtn.BorderSizePixel = 0
-FloatingBtn.Active = true
-FloatingBtn.Draggable = true
-FloatingBtn.Parent = ScreenGui
-
-local FloatCorner = Instance.new("UICorner", FloatingBtn)
-FloatCorner.CornerRadius = UDim.new(0, 18)
-
-local FloatStroke = Instance.new("UIStroke", FloatingBtn)
-FloatStroke.Color = Color3.fromRGB(0, 200, 100)
-FloatStroke.Thickness = 1
-
-local LogoImg = Instance.new("ImageLabel")
-LogoImg.Size = UDim2.new(0, 28, 0, 28)
-LogoImg.Position = UDim2.new(0, 4, 0, 4)
-LogoImg.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-LogoImg.Image = "rbxassetid://10849911875"
-LogoImg.Parent = FloatingBtn
-Instance.new("UICorner", LogoImg).CornerRadius = UDim.new(1, 0)
-
-local SlowModeLabel = Instance.new("TextButton")
-SlowModeLabel.Size = UDim2.new(0, 70, 1, 0)
-SlowModeLabel.Position = UDim2.new(0, 36, 0, 0)
-SlowModeLabel.BackgroundTransparency = 1
-SlowModeLabel.Text = "Slow Mode"
-SlowModeLabel.TextColor3 = Color3.fromRGB(0, 255, 120)
-SlowModeLabel.Font = Enum.Font.GothamMedium
-SlowModeLabel.TextSize = 11
-SlowModeLabel.Parent = FloatingBtn
-
-SlowModeLabel.MouseButton1Click:Connect(function()
-    slowModeActive = not slowModeActive
-    if slowModeActive then
-        FloatStroke.Color = Color3.fromRGB(0, 200, 100)
-        SlowModeLabel.TextColor3 = Color3.fromRGB(0, 255, 120)
-    else
-        FloatStroke.Color = Color3.fromRGB(50, 55, 60)
-        SlowModeLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-    end
-end)
-
--- Ventana Principal
+-- Marco Principal
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainCard"
 MainFrame.Size = UDim2.new(0, 270, 0, 210)
-MainFrame.Position = UDim2.new(0.65, 0, 0.12, 0)
-MainFrame.BackgroundColor3 = Color3.fromRGB(14, 17, 16)
+MainFrame.Position = UDim2.new(0.5, -135, 0.22, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(12, 15, 14)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
-MainFrame.ClipsDescendants = true
+MainFrame.ClipsDescendants = false
 MainFrame.Parent = ScreenGui
 
-local MainCorner = Instance.new("UICorner", MainFrame)
-MainCorner.CornerRadius = UDim.new(0, 14)
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 10)
+MainCorner.Parent = MainFrame
 
-local MainStroke = Instance.new("UIStroke", MainFrame)
-MainStroke.Color = Color3.fromRGB(25, 45, 30)
-MainStroke.Thickness = 1.5
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(28, 48, 36)
+MainStroke.Thickness = 1.2
+MainStroke.Parent = MainFrame
 
--- Header
-local HeaderIcon = Instance.new("ImageLabel")
-HeaderIcon.Size = UDim2.new(0, 26, 0, 26)
-HeaderIcon.Position = UDim2.new(0, 12, 0, 10)
-HeaderIcon.BackgroundTransparency = 1
-HeaderIcon.Image = "rbxassetid://10849911875"
-HeaderIcon.Parent = MainFrame
-
+-- Encabezado
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(0, 140, 0, 16)
-TitleLabel.Position = UDim2.new(0, 44, 0, 9)
+TitleLabel.Size = UDim2.new(1, -30, 0, 18)
+TitleLabel.Position = UDim2.new(0, 14, 0, 8)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "LENNON HUB"
-TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TitleLabel.TextColor3 = Color3.fromRGB(240, 240, 240)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 13
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = MainFrame
 
-local SubtitleLabel = Instance.new("TextLabel")
-SubtitleLabel.Size = UDim2.new(0, 140, 0, 12)
-SubtitleLabel.Position = UDim2.new(0, 44, 0, 25)
-SubtitleLabel.BackgroundTransparency = 1
-SubtitleLabel.Text = "BEST EGG SYSTEM"
-SubtitleLabel.TextColor3 = Color3.fromRGB(120, 150, 130)
-SubtitleLabel.Font = Enum.Font.Gotham
-SubtitleLabel.TextSize = 9
-SubtitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-SubtitleLabel.Parent = MainFrame
+local SubTitleLabel = Instance.new("TextLabel")
+SubTitleLabel.Size = UDim2.new(1, -30, 0, 12)
+SubTitleLabel.Position = UDim2.new(0, 14, 0, 26)
+SubTitleLabel.BackgroundTransparency = 1
+SubTitleLabel.Text = "BEST EGG SYSTEM"
+SubTitleLabel.TextColor3 = Color3.fromRGB(140, 150, 140)
+SubTitleLabel.Font = Enum.Font.Gotham
+SubTitleLabel.TextSize = 9
+SubTitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+SubTitleLabel.Parent = MainFrame
 
-local DiscordBtn = Instance.new("ImageLabel")
-DiscordBtn.Size = UDim2.new(0, 20, 0, 20)
-DiscordBtn.Position = UDim2.new(1, -32, 0, 12)
-DiscordBtn.BackgroundTransparency = 1
-DiscordBtn.Image = "rbxassetid://10849912000"
-DiscordBtn.Parent = MainFrame
-
--- Card de "BEST EGG"
+-- Tarjeta del "BEST EGG"
 local BestEggCard = Instance.new("Frame")
-BestEggCard.Size = UDim2.new(0.92, 0, 0, 56)
-BestEggCard.Position = UDim2.new(0.04, 0, 0, 44)
-BestEggCard.BackgroundColor3 = Color3.fromRGB(20, 25, 22)
+BestEggCard.Size = UDim2.new(0.92, 0, 0, 52)
+BestEggCard.Position = UDim2.new(0.04, 0, 0, 46)
+BestEggCard.BackgroundColor3 = Color3.fromRGB(18, 22, 20)
 BestEggCard.BorderSizePixel = 0
 BestEggCard.Parent = MainFrame
-Instance.new("UICorner", BestEggCard).CornerRadius = UDim.new(0, 8)
 
-local BestEggSubtext = Instance.new("TextLabel")
-BestEggSubtext.Size = UDim2.new(1, -20, 0, 12)
-BestEggSubtext.Position = UDim2.new(0, 10, 0, 4)
-BestEggSubtext.BackgroundTransparency = 1
-BestEggSubtext.Text = "BEST EGG"
-BestEggSubtext.TextColor3 = Color3.fromRGB(140, 150, 145)
-BestEggSubtext.Font = Enum.Font.Gotham
-BestEggSubtext.TextSize = 8
-BestEggSubtext.TextXAlignment = Enum.TextXAlignment.Left
-BestEggSubtext.Parent = BestEggCard
+local CardCorner = Instance.new("UICorner")
+CardCorner.CornerRadius = UDim.new(0, 8)
+CardCorner.Parent = BestEggCard
+
+local CardStroke = Instance.new("UIStroke")
+CardStroke.Color = Color3.fromRGB(32, 42, 36)
+CardStroke.Thickness = 1
+CardStroke.Parent = BestEggCard
+
+local BestTag = Instance.new("TextLabel")
+BestTag.Size = UDim2.new(0, 60, 0, 12)
+BestTag.Position = UDim2.new(0, 46, 0, 6)
+BestTag.BackgroundTransparency = 1
+BestTag.Text = "BEST EGG"
+BestTag.TextColor3 = Color3.fromRGB(130, 140, 130)
+BestTag.Font = Enum.Font.GothamBold
+BestTag.TextSize = 8
+BestTag.TextXAlignment = Enum.TextXAlignment.Left
+BestTag.Parent = BestEggCard
 
 local ArrowBtn = Instance.new("TextButton")
-ArrowBtn.Size = UDim2.new(0, 20, 0, 20)
-ArrowBtn.Position = UDim2.new(1, -24, 0, 4)
+ArrowBtn.Size = UDim2.new(0, 18, 0, 18)
+ArrowBtn.Position = UDim2.new(1, -24, 0, 6)
 ArrowBtn.BackgroundTransparency = 1
 ArrowBtn.Text = "v"
-ArrowBtn.TextColor3 = Color3.fromRGB(80, 220, 120)
+ArrowBtn.TextColor3 = Color3.fromRGB(140, 220, 160)
 ArrowBtn.Font = Enum.Font.GothamBold
-ArrowBtn.TextSize = 13
+ArrowBtn.TextSize = 12
 ArrowBtn.Parent = BestEggCard
 
 local EggIconImg = Instance.new("ImageLabel")
-EggIconImg.Size = UDim2.new(0, 32, 0, 32)
-EggIconImg.Position = UDim2.new(0, 8, 0, 18)
-EggIconImg.BackgroundColor3 = Color3.fromRGB(15, 18, 16)
+EggIconImg.Size = UDim2.new(0, 36, 0, 36)
+EggIconImg.Position = UDim2.new(0, 6, 0.5, -18)
+EggIconImg.BackgroundColor3 = Color3.fromRGB(24, 30, 26)
 EggIconImg.BorderSizePixel = 0
 EggIconImg.Image = "rbxassetid://10849911500"
 EggIconImg.Parent = BestEggCard
 Instance.new("UICorner", EggIconImg).CornerRadius = UDim.new(0, 6)
 
 local EggNameLabel = Instance.new("TextLabel")
-EggNameLabel.Size = UDim2.new(0, 110, 0, 16)
+EggNameLabel.Size = UDim2.new(0, 120, 0, 16)
 EggNameLabel.Position = UDim2.new(0, 46, 0, 18)
 EggNameLabel.BackgroundTransparency = 1
-EggNameLabel.Text = "NO EGG FOUND"
+EggNameLabel.Text = "SCANNING..."
 EggNameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 EggNameLabel.Font = Enum.Font.GothamBold
 EggNameLabel.TextSize = 11
@@ -361,7 +299,7 @@ EggNameLabel.TextXAlignment = Enum.TextXAlignment.Left
 EggNameLabel.Parent = BestEggCard
 
 local EggRarityLabel = Instance.new("TextLabel")
-EggRarityLabel.Size = UDim2.new(0, 110, 0, 12)
+EggRarityLabel.Size = UDim2.new(0, 120, 0, 12)
 EggRarityLabel.Position = UDim2.new(0, 46, 0, 34)
 EggRarityLabel.BackgroundTransparency = 1
 EggRarityLabel.Text = "Cosmic"
@@ -418,53 +356,55 @@ TeleguiadoLabel.TextXAlignment = Enum.TextXAlignment.Left
 TeleguiadoLabel.Parent = MainFrame
 
 local OneShotLabel = Instance.new("TextLabel")
-OneShotLabel.Size = UDim2.new(0, 90, 0, 12)
+OneShotLabel.Size = UDim2.new(0, 65, 0, 12)
 OneShotLabel.Position = UDim2.new(0.04, 0, 0, 126)
 OneShotLabel.BackgroundTransparency = 1
 OneShotLabel.Text = "ONE SHOT"
-OneShotLabel.TextColor3 = Color3.fromRGB(110, 120, 115)
+OneShotLabel.TextColor3 = Color3.fromRGB(130, 140, 130)
 OneShotLabel.Font = Enum.Font.Gotham
-OneShotLabel.TextSize = 8
+OneShotLabel.TextSize = 9
 OneShotLabel.TextXAlignment = Enum.TextXAlignment.Left
 OneShotLabel.Parent = MainFrame
 
--- Checkbox [ LOOP ]
+-- Checkbox LOOP
 local LoopBox = Instance.new("TextButton")
-LoopBox.Size = UDim2.new(0, 14, 0, 14)
-LoopBox.Position = UDim2.new(0, 140, 0, 118)
-LoopBox.BackgroundColor3 = Color3.fromRGB(25, 30, 28)
-LoopBox.Text = ""
+LoopBox.Size = UDim2.new(0, 16, 0, 16)
+LoopBox.Position = UDim2.new(0.52, 0, 0, 116)
+LoopBox.BackgroundColor3 = Color3.fromRGB(24, 28, 26)
 LoopBox.BorderSizePixel = 0
+LoopBox.Text = ""
+LoopBox.TextColor3 = Color3.fromRGB(50, 205, 50)
+LoopBox.Font = Enum.Font.GothamBold
+LoopBox.TextSize = 12
 LoopBox.Parent = MainFrame
 Instance.new("UICorner", LoopBox).CornerRadius = UDim.new(0, 4)
 local LoopStroke = Instance.new("UIStroke", LoopBox)
-LoopStroke.Color = Color3.fromRGB(60, 70, 65)
+LoopStroke.Color = Color3.fromRGB(45, 55, 48)
 
-local LoopLabel = Instance.new("TextLabel")
-LoopLabel.Size = UDim2.new(0, 40, 0, 14)
-LoopLabel.Position = UDim2.new(0, 158, 0, 118)
-LoopLabel.BackgroundTransparency = 1
-LoopLabel.Text = "LOOP"
-LoopLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-LoopLabel.Font = Enum.Font.GothamSemibold
-LoopLabel.TextSize = 9
-LoopLabel.TextXAlignment = Enum.TextXAlignment.Left
-LoopLabel.Parent = MainFrame
+local LoopText = Instance.new("TextLabel")
+LoopText.Size = UDim2.new(0, 35, 0, 16)
+LoopText.Position = UDim2.new(0.52, 22, 0, 116)
+LoopText.BackgroundTransparency = 1
+LoopText.Text = "LOOP"
+LoopText.TextColor3 = Color3.fromRGB(180, 190, 185)
+LoopText.Font = Enum.Font.GothamBold
+LoopText.TextSize = 10
+LoopText.TextXAlignment = Enum.TextXAlignment.Left
+LoopText.Parent = MainFrame
 
 LoopBox.MouseButton1Click:Connect(function()
     loopActive = not loopActive
     LoopBox.Text = loopActive and "X" or ""
-    LoopBox.TextColor3 = Color3.fromRGB(80, 255, 120)
-    OneShotLabel.Text = loopActive and "CONTINUOUS" or "ONE SHOT"
+    LoopBox.BackgroundColor3 = loopActive and Color3.fromRGB(30, 48, 36) or Color3.fromRGB(24, 28, 26)
 end)
 
--- Switch ON/OFF
+-- Switch Toggle (ON/OFF Teleguiado)
 local SwitchBg = Instance.new("TextButton")
 SwitchBg.Size = UDim2.new(0, 36, 0, 18)
-SwitchBg.Position = UDim2.new(1, -48, 0, 116)
+SwitchBg.Position = UDim2.new(1, -50, 0, 115)
 SwitchBg.BackgroundColor3 = Color3.fromRGB(40, 45, 42)
-SwitchBg.Text = ""
 SwitchBg.BorderSizePixel = 0
+SwitchBg.Text = ""
 SwitchBg.Parent = MainFrame
 Instance.new("UICorner", SwitchBg).CornerRadius = UDim.new(1, 0)
 
@@ -479,7 +419,7 @@ Instance.new("UICorner", SwitchDot).CornerRadius = UDim.new(1, 0)
 SwitchBg.MouseButton1Click:Connect(function()
     teleguiadoActive = not teleguiadoActive
     if teleguiadoActive then
-        SwitchBg.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
+        SwitchBg.BackgroundColor3 = Color3.fromRGB(45, 180, 85)
         SwitchDot.Position = UDim2.new(1, -16, 0, 2)
         SwitchDot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     else
@@ -489,61 +429,96 @@ SwitchBg.MouseButton1Click:Connect(function()
     end
 end)
 
--- Sección "RARITY FILTER • TP + TELEGUIADO"
-local FilterTitle = Instance.new("TextLabel")
-FilterTitle.Size = UDim2.new(1, -20, 0, 14)
-FilterTitle.Position = UDim2.new(0.04, 0, 0, 148)
-FilterTitle.BackgroundTransparency = 1
-FilterTitle.Text = "RARITY FILTER • TP + TELEGUIADO"
-FilterTitle.TextColor3 = Color3.fromRGB(70, 200, 100)
-FilterTitle.Font = Enum.Font.GothamSemibold
-FilterTitle.TextSize = 8
-FilterTitle.TextXAlignment = Enum.TextXAlignment.Left
-FilterTitle.Parent = MainFrame
+-- Sección "RARITY FILTER"
+local FilterHeader = Instance.new("TextLabel")
+FilterHeader.Size = UDim2.new(1, -20, 0, 12)
+FilterHeader.Position = UDim2.new(0.04, 0, 0, 148)
+FilterHeader.BackgroundTransparency = 1
+FilterHeader.Text = "RARITY FILTER • TP + TELEGUIADO"
+FilterHeader.TextColor3 = Color3.fromRGB(90, 180, 120)
+FilterHeader.Font = Enum.Font.GothamBold
+FilterHeader.TextSize = 8
+FilterHeader.TextXAlignment = Enum.TextXAlignment.Left
+FilterHeader.Parent = MainFrame
 
-local function createRarityPill(name, color, posX, posY)
+-- Pills de Rarezas
+local function createRarityPill(name, color, xPos, yPos)
     local pill = Instance.new("TextButton")
-    pill.Size = UDim2.new(0, 118, 0, 20)
-    pill.Position = UDim2.new(0, posX, 0, posY)
-    pill.BackgroundColor3 = Color3.fromRGB(22, 26, 24)
-    pill.Text = "✓ " .. name
-    pill.TextColor3 = color
-    pill.Font = Enum.Font.GothamBold
-    pill.TextSize = 10
+    pill.Size = UDim2.new(0.44, 0, 0, 20)
+    pill.Position = UDim2.new(xPos, 0, 0, yPos)
+    pill.BackgroundColor3 = selectedRarities[name] and Color3.fromRGB(22, 28, 25) or Color3.fromRGB(16, 18, 17)
     pill.BorderSizePixel = 0
+    pill.Text = (selectedRarities[name] and "✔ " or "") .. name
+    pill.TextColor3 = selectedRarities[name] and color or Color3.fromRGB(110, 120, 115)
+    pill.Font = Enum.Font.GothamBold
+    pill.TextSize = 9
     pill.Parent = MainFrame
-    Instance.new("UICorner", pill).CornerRadius = UDim.new(0, 5)
+    Instance.new("UICorner", pill).CornerRadius = UDim.new(0, 6)
     
     local stroke = Instance.new("UIStroke", pill)
-    stroke.Color = color
-    stroke.Thickness = 1
+    stroke.Color = selectedRarities[name] and Color3.fromRGB(40, 60, 48) or Color3.fromRGB(28, 34, 30)
     
     pill.MouseButton1Click:Connect(function()
         selectedRarities[name] = not selectedRarities[name]
-        if selectedRarities[name] then
-            pill.Text = "✓ " .. name
-            pill.BackgroundColor3 = Color3.fromRGB(22, 26, 24)
-            pill.TextColor3 = color
-        else
-            pill.Text = name
-            pill.BackgroundColor3 = Color3.fromRGB(15, 17, 16)
-            pill.TextColor3 = Color3.fromRGB(80, 80, 80)
-        end
+        pill.Text = (selectedRarities[name] and "✔ " or "") .. name
+        pill.TextColor3 = selectedRarities[name] and color or Color3.fromRGB(110, 120, 115)
+        pill.BackgroundColor3 = selectedRarities[name] and Color3.fromRGB(22, 28, 25) or Color3.fromRGB(16, 18, 17)
+        stroke.Color = selectedRarities[name] and Color3.fromRGB(40, 60, 48) or Color3.fromRGB(28, 34, 30)
         scanEggs()
     end)
 end
 
-createRarityPill("Cosmic", rarityColors["Cosmic"], 10, 165)
-createRarityPill("Secret", rarityColors["Secret"], 140, 165)
-createRarityPill("Eternal", rarityColors["Eternal"], 10, 188)
-createRarityPill("Divine", rarityColors["Divine"], 140, 188)
+createRarityPill("Cosmic", rarityColors["Cosmic"], 0.04, 166)
+createRarityPill("Secret", rarityColors["Secret"], 0.52, 166)
+createRarityPill("Eternal", rarityColors["Eternal"], 0.04, 188)
+createRarityPill("Divine", rarityColors["Divine"], 0.52, 188)
+
+-- Widget flotante "Slow Mode"
+local SlowWidget = Instance.new("Frame")
+SlowWidget.Name = "SlowModeWidget"
+SlowWidget.Size = UDim2.new(0, 110, 0, 36)
+SlowWidget.Position = UDim2.new(0.04, 0, 0.55, 0)
+SlowWidget.BackgroundColor3 = Color3.fromRGB(14, 18, 16)
+SlowWidget.BorderSizePixel = 0
+SlowWidget.Active = true
+SlowWidget.Draggable = true
+SlowWidget.Parent = ScreenGui
+Instance.new("UICorner", SlowWidget).CornerRadius = UDim.new(1, 0)
+
+local SlowStroke = Instance.new("UIStroke", SlowWidget)
+SlowStroke.Color = Color3.fromRGB(35, 80, 50)
+SlowStroke.Thickness = 1.2
+
+local SlowText = Instance.new("TextLabel")
+SlowText.Size = UDim2.new(0, 60, 1, 0)
+SlowText.Position = UDim2.new(0, 38, 0, 0)
+SlowText.BackgroundTransparency = 1
+SlowText.Text = "Slow Mode"
+SlowText.TextColor3 = Color3.fromRGB(230, 240, 235)
+SlowText.Font = Enum.Font.GothamBold
+SlowText.TextSize = 10
+SlowText.Parent = SlowWidget
+
+local SlowToggleBtn = Instance.new("TextButton")
+SlowToggleBtn.Size = UDim2.new(0, 24, 0, 24)
+SlowToggleBtn.Position = UDim2.new(0, 6, 0.5, -12)
+SlowToggleBtn.BackgroundColor3 = Color3.fromRGB(35, 180, 75)
+SlowToggleBtn.BorderSizePixel = 0
+SlowToggleBtn.Text = ""
+SlowToggleBtn.Parent = SlowWidget
+Instance.new("UICorner", SlowToggleBtn).CornerRadius = UDim.new(1, 0)
+
+SlowToggleBtn.MouseButton1Click:Connect(function()
+    slowModeActive = not slowModeActive
+    SlowToggleBtn.BackgroundColor3 = slowModeActive and Color3.fromRGB(35, 180, 75) or Color3.fromRGB(60, 65, 62)
+end)
 
 -- ========================================================
--- 3. ACTUALIZACIÓN VISUAL (Fluido, 60 FPS)
+-- 3. BUCLE DE ACTUALIZACIÓN EN VIVO DE LA INTERFAZ
 -- ========================================================
 task.spawn(function()
     while true do
-        task.wait(1.0)
+        task.wait(0.8)
         scanEggs()
         
         if bestEgg then
@@ -551,6 +526,9 @@ task.spawn(function()
             EggRarityLabel.Text = bestEgg.rarity
             EggRarityLabel.TextColor3 = rarityColors[bestEgg.rarity] or Color3.fromRGB(255, 255, 255)
             EggValueLabel.Text = bestEgg.valueStr
+            if bestEgg.image then
+                EggIconImg.Image = bestEgg.image
+            end
         else
             EggNameLabel.Text = "NO EGG FOUND"
             EggRarityLabel.Text = "--"
@@ -580,7 +558,7 @@ task.spawn(function()
                     rankLabel.Parent = row
                     
                     local nameL = Instance.new("TextLabel")
-                    nameL.Size = UDim2.new(0, 90, 1, 0)
+                    nameL.Size = UDim2.new(0, 110, 1, 0)
                     nameL.Position = UDim2.new(0, 24, 0, 0)
                     nameL.BackgroundTransparency = 1
                     nameL.Text = item.name
@@ -629,11 +607,11 @@ task.spawn(function()
             
             if hrp and hum and hum.Health > 0 then
                 local eggPos = bestEgg.instance.Position
-                local safeHoverPos = eggPos + Vector3.new(0, 6.0, 0)
+                local safeHoverPos = eggPos + Vector3.new(0, 5.0, 0)
                 local horizontalDist = (Vector3.new(eggPos.X, 0, eggPos.Z) - Vector3.new(hrp.Position.X, 0, hrp.Position.Z)).Magnitude
                 
                 if horizontalDist > 4 then
-                    -- Subir alto en el cielo (Y + 20) para volar sobre las bases sin que los guardias te toquen
+                    -- Vuelo alto (Y + 20 studs) para evitar trampas de oso y guardias
                     local skyTarget = Vector3.new(eggPos.X, eggPos.Y + 18, eggPos.Z)
                     local dir = (skyTarget - hrp.Position).Unit
                     
@@ -644,11 +622,11 @@ task.spawn(function()
                         hrp.CFrame = CFrame.new(skyTarget)
                     end
                 else
-                    -- Descender flotando directamente sobre el huevo
+                    -- Flotación directa encima del huevo
                     hrp.CFrame = CFrame.new(safeHoverPos)
                     hrp.Velocity = Vector3.new(0, 0, 0)
                     
-                    -- Activar robo
+                    -- Activar prompt
                     local prompt = bestEgg.prompt or bestEgg.instance:FindFirstChildOfClass("ProximityPrompt")
                     if prompt and fireproximityprompt then
                         fireproximityprompt(prompt, 0)
@@ -660,11 +638,10 @@ task.spawn(function()
                         firetouchinterest(hrp, bestEgg.instance, 1)
                     end
                     
-                    -- ¡¡CORRE!! ESCAPE AÉREO INMEDIATO:
-                    -- Subir a 35 studs en el cielo al instante para que los guardias ("GuardComponent") no te alcancen
+                    -- ESCAPE AÉREO INMEDIATO: Subir 30 studs para evadir GuardComponent
                     hrp.CFrame = hrp.CFrame + Vector3.new(0, 25, 0)
                     
-                    -- Si conocemos la posición de tu base, volar directo a ella por el cielo
+                    -- Navegar de vuelta a la base del jugador por el aire
                     if myBasePosition then
                         task.wait(0.2)
                         local escapeSky = Vector3.new(myBasePosition.X, hrp.Position.Y, myBasePosition.Z)
@@ -686,4 +663,4 @@ task.spawn(function()
     end
 end)
 
-print("¡Lennon Hub Best Egg System (V7 DEFINITIVO) cargado!")
+print("¡Lennon Hub Best Egg System (V8 DEFINITIVO) cargado con éxito!")
