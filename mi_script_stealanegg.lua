@@ -1,16 +1,19 @@
 --[[
     ========================================================
-    STEAL AN EGG - LENNON HUB BEST EGG SYSTEM (V13 PERFECCIÓN)
+    STEAL AN EGG - LENNON HUB BEST EGG SYSTEM (V14.0 DEFINITIVA)
     - SISTEMA DE MINIMIZAR:
         * Botón "X" en la esquina superior derecha para minimizar
-        * Botón circular flotante draggable para abrir / cerrar en cualquier momento
-    - FILTROS EXACTOS A LENNON HUB:
-        * Viene con "Cosmic" activo por defecto (#1 Imp 56.9M, #2 Demon Hound 24.76M)
-        * Al tocar otra rareza, se selecciona SOLO esa (modo radio)
-        * Si tocas la misma rareza activa para apagarla, APARECEN TODOS
-    - LISTA DESPLEGABLE DINÁMICA:
-        * Al abrir con "v", MainFrame crece y empuja Teleguiado hacia abajo (cero traslape)
-        * Lista limpia con #Rank, Nombre, Rareza coloreada y Precio
+        * Botón circular flotante draggable con logo para reabrir en cualquier momento
+    - FILTRO INTELIGENTE Y FLEXIBLE:
+        * Puedes prender todos, solo uno, o los que tú quieras
+        * Si apagas todos, automáticamente muestra TODOS los mejores de la pista
+    - DETECCIÓN OFICIAL DEL SERVIDOR:
+        * Lee directamente EggState.ReadFieldEggs() de la memoria del juego
+        * Nombres y precios oficiales con EggRecords.SellPrice()
+        * Posición física directa con BoundsCFrame (cero fallos de streaming)
+    - UI PERFECTA:
+        * Cero traslapes: la lista empuja Teleguiado limpiamente hacia abajo
+        * Muestra #Rank, Nombre, Rareza coloreada y Precio
     - TELEGUIADO AÉREO ANTI-GUARDIAS CON REGRESO A BASE
     ========================================================
 ]]
@@ -42,8 +45,13 @@ local loopActive = false
 local slowModeActive = true
 local expandedList = false
 
--- Filtro: "Cosmic" por defecto (igual que Lennon Hub). Si es nil, APARECEN TODOS
-local activeRarityFilter = "Cosmic"
+-- Filtros de Rarezas Seleccionables Libremente
+local selectedRarities = {
+    ["Cosmic"] = true,
+    ["Secret"] = true,
+    ["Eternal"] = true,
+    ["Divine"] = true
+}
 
 local rarityColors = {
     ["Cosmic"] = Color3.fromRGB(145, 60, 240),   -- Púrpura brillante
@@ -108,7 +116,7 @@ local function findMyBase()
     return myBasePosition
 end
 
--- Formateador Numérico exacto a Lennon Hub (56.9M, 24.76M, etc.)
+-- Formateador Numérico (Lennon Hub: 56.9M, 24.76M, etc.)
 local function formatNumber(num)
     if not num or num == 0 then return "0" end
     if num >= 1000000000 then
@@ -138,32 +146,41 @@ local function scanEggs()
     local found = {}
     local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
     
+    -- Comprobar si hay al menos una rareza seleccionada
+    local anySelected = false
+    for _, active in pairs(selectedRarities) do
+        if active then anySelected = true; break end
+    end
+    
     for _, rec in pairs(fieldData.Records) do
-        -- Comprobar que el huevo esté FÍSICAMENTE plantado en la pista
-        local model = slotsFolder and rec.Uid and slotsFolder:FindFirstChild(rec.Uid)
-        if model then
-            local rarity = getRarityFromRecord(rec)
+        local rarity = getRarityFromRecord(rec)
+        
+        -- Si ninguna está seleccionada -> MODO TODOS
+        -- Si hay alguna seleccionada -> filtrar por las activas
+        local isAllowed = (not anySelected) or selectedRarities[rarity]
+        
+        if isAllowed then
+            local price = 0
+            pcall(function() price = EggRecords.SellPrice(rec) end)
             
-            -- Si activeRarityFilter == nil, APARECEN TODOS
-            -- Si tiene valor, filtra solo por esa categoría
-            if activeRarityFilter == nil or rarity == activeRarityFilter then
-                local price = 0
-                pcall(function() price = EggRecords.SellPrice(rec) end)
-                
-                local petName = rec.AssetCategory or EggRecords.DisplayName(rec) or "Egg"
-                local eggPos = rec.BoundsCFrame and rec.BoundsCFrame.Position or (rec.BottomCFrame and rec.BottomCFrame.Position)
-                local hitPart = model:FindFirstChild("Hitbox") or model:FindFirstChildWhichIsA("BasePart")
-                
-                table.insert(found, {
-                    name = petName,
-                    rarity = rarity,
-                    price = price,
-                    valueStr = formatNumber(price),
-                    pos = eggPos,
-                    hitPart = hitPart,
-                    uid = rec.Uid
-                })
+            local petName = rec.AssetCategory or EggRecords.DisplayName(rec) or "Egg"
+            local eggPos = rec.BoundsCFrame and rec.BoundsCFrame.Position or (rec.BottomCFrame and rec.BottomCFrame.Position)
+            
+            local hitPart = nil
+            if slotsFolder and rec.Uid and slotsFolder:FindFirstChild(rec.Uid) then
+                local model = slotsFolder[rec.Uid]
+                hitPart = model:FindFirstChild("Hitbox") or model:FindFirstChildWhichIsA("BasePart")
             end
+            
+            table.insert(found, {
+                name = petName,
+                rarity = rarity,
+                price = price,
+                valueStr = formatNumber(price),
+                pos = eggPos,
+                hitPart = hitPart,
+                uid = rec.Uid
+            })
         end
     end
     
@@ -188,7 +205,7 @@ local targetGui = game:GetService("CoreGui")
 if gethui then pcall(function() targetGui = gethui() end) end
 ScreenGui.Parent = targetGui
 
--- Botón Flotante Circular para Abrir / Minimizar (Logo Lennon Hub)
+-- Botón Flotante Circular para Abrir / Minimizar
 local ToggleButton = Instance.new("ImageButton")
 ToggleButton.Name = "LennonHubToggle"
 ToggleButton.Size = UDim2.new(0, 42, 0, 42)
@@ -225,14 +242,14 @@ MainStroke.Color = Color3.fromRGB(28, 48, 36)
 MainStroke.Thickness = 1.2
 MainStroke.Parent = MainFrame
 
--- Al tocar el botón flotante: Abre o Cierra el menú
+-- Abrir / Cerrar al tocar botón flotante
 ToggleButton.MouseButton1Click:Connect(function()
     MainFrame.Visible = not MainFrame.Visible
 end)
 
 -- Encabezado
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -60, 0, 18)
+TitleLabel.Size = UDim2.new(0, 95, 0, 18)
 TitleLabel.Position = UDim2.new(0, 14, 0, 8)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "LENNON HUB"
@@ -242,12 +259,13 @@ TitleLabel.TextSize = 13
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = MainFrame
 
+-- Insignia Verde V14.0
 local VersionBadge = Instance.new("TextLabel")
-VersionBadge.Size = UDim2.new(0, 38, 0, 14)
-VersionBadge.Position = UDim2.new(0, 106, 0, 10)
+VersionBadge.Size = UDim2.new(0, 42, 0, 14)
+VersionBadge.Position = UDim2.new(0, 110, 0, 10)
 VersionBadge.BackgroundColor3 = Color3.fromRGB(28, 55, 38)
 VersionBadge.BorderSizePixel = 0
-VersionBadge.Text = "V13.0"
+VersionBadge.Text = "V14.0"
 VersionBadge.TextColor3 = Color3.fromRGB(80, 240, 120)
 VersionBadge.Font = Enum.Font.GothamBold
 VersionBadge.TextSize = 8
@@ -258,7 +276,7 @@ local SubTitleLabel = Instance.new("TextLabel")
 SubTitleLabel.Size = UDim2.new(1, -60, 0, 12)
 SubTitleLabel.Position = UDim2.new(0, 14, 0, 26)
 SubTitleLabel.BackgroundTransparency = 1
-SubTitleLabel.Text = "BEST EGG SYSTEM • V13.0"
+SubTitleLabel.Text = "BEST EGG SYSTEM • V14.0"
 SubTitleLabel.TextColor3 = Color3.fromRGB(140, 150, 140)
 SubTitleLabel.Font = Enum.Font.Gotham
 SubTitleLabel.TextSize = 9
@@ -391,8 +409,8 @@ ArrowBtn.MouseButton1Click:Connect(function()
     ListScroll.Visible = expandedList
     ArrowBtn.Text = expandedList and "^" or "v"
     if expandedList then
-        MainFrame.Size = UDim2.new(0, 270, 0, 330)
-        BottomContainer.Position = UDim2.new(0, 0, 0, 218)
+        MainFrame.Size = UDim2.new(0, 270, 0, 335)
+        BottomContainer.Position = UDim2.new(0, 0, 0, 220)
     else
         MainFrame.Size = UDim2.new(0, 270, 0, 215)
         BottomContainer.Position = UDim2.new(0, 0, 0, 105)
@@ -497,12 +515,12 @@ FilterHeader.TextSize = 8
 FilterHeader.TextXAlignment = Enum.TextXAlignment.Left
 FilterHeader.Parent = BottomContainer
 
--- Pills de Rarezas (Modo Lennon Hub: 1 activo a la vez, o ninguno = TODOS)
+-- Pills de Rarezas con Selección Libre y Flexible
 local pillButtons = {}
 
 local function updatePillStyles()
     for rName, pData in pairs(pillButtons) do
-        local isActive = (activeRarityFilter == rName)
+        local isActive = selectedRarities[rName]
         pData.btn.BackgroundColor3 = isActive and rarityBgActive[rName] or rarityBgInactive[rName]
         pData.btn.TextColor3 = isActive and rarityColors[rName] or Color3.fromRGB(90, 95, 100)
         pData.stroke.Color = isActive and rarityColors[rName] or Color3.fromRGB(32, 36, 38)
@@ -526,11 +544,8 @@ local function createRarityPill(name, xPos, yPos)
     pillButtons[name] = { btn = pill, stroke = stroke }
     
     pill.MouseButton1Click:Connect(function()
-        if activeRarityFilter == name then
-            activeRarityFilter = nil  -- Si vuelves a tocar el mismo, se apaga y APARECEN TODOS
-        else
-            activeRarityFilter = name  -- Si tocas otro, se activa solo ese
-        end
+        -- Conmutar estado de esta rareza
+        selectedRarities[name] = not selectedRarities[name]
         updatePillStyles()
         scanEggs()
     end)
@@ -749,8 +764,8 @@ end)
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
         Title = "LENNON HUB",
-        Text = "Versión V13.0 Oficial cargada con éxito!",
+        Text = "Versión V14.0 Oficial cargada con éxito!",
         Duration = 4
     })
 end)
-print("¡Lennon Hub Best Egg System (V13.0 OFICIAL) cargado con éxito!")
+print("¡Lennon Hub Best Egg System (V14.0 OFICIAL) cargado con éxito!")
