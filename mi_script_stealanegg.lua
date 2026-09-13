@@ -1,11 +1,11 @@
 --[[
     ========================================================
-    REPLICA EXACTA: LENNON HUB - BEST EGG SYSTEM (V2 PRO)
-    Desarrollado para Steal An Egg (Delta Executor Móvil / PC)
-    - DETECCIÓN EN TIEMPO REAL: Detecta nuevos huevos en el milisegundo exacto que spawnean
-    - Compatible con eventos nuevos (Ángeles, Demonios, Cósmicos, Secretos, etc.)
-    - Sistema Event-Driven con DescendantAdded (Cero lag, detección instantánea)
-    - Teleguiado Inteligente (One Shot / Loop / Slow Mode)
+    REPLICA EXACTA: LENNON HUB - BEST EGG SYSTEM (V3 PRO)
+    - FIX DEFINITIVO NOMBRE: Detecta "Koi", "Snowy Owl", etc. (ignora SmartPromptPart)
+    - FIX VALOR REAL: Extrae 36.21M, 28.02M (limpiando $ y /s)
+    - FIX ANTI-MUERTE: Teleguiado aéreo seguro (vuela por el cielo a 12 studs de altura)
+      para NUNCA pisar las trampas de oso (Bear Traps) ni tocar barreras mortales
+    - Teleguiado con descenso controlado y robo aéreo
     ========================================================
 ]]
 
@@ -39,14 +39,12 @@ local rarityColors = {
     ["Divine"] = Color3.fromRGB(255, 215, 0)     -- Dorado / Amarillo
 }
 
--- Diccionario en memoria de todos los huevos activos en el servidor
-local activeEggsMap = {}
-local sortedEggsList = {}
+local currentEggs = {}
 local bestEgg = nil
 
--- Palabras prohibidas que NUNCA son huevos
+-- Palabras prohibidas que son partes mecánicas del mapa
 local blacklistWords = {
-    "fuse", "machine", "shop", "door", "wall", "stand", "pad", "base", "spawn", "safe", 
+    "fuse", "machine", "shop", "door", "wall", "stand", "pad", "spawn", "safe", 
     "zone", "mesh", "cube", "button", "portal", "leaderboard", "upgrade", "coin", "sell"
 }
 
@@ -61,6 +59,7 @@ local function isBlacklisted(str)
     return false
 end
 
+-- Formatea "$36.21M/s" a número numérico
 local function parseValue(str)
     if not str then return 0 end
     local num = tonumber(string.match(str, "[%d%.]+")) or 0
@@ -75,132 +74,122 @@ local function parseValue(str)
     return num
 end
 
--- ========================================================
--- 1. INSPECTOR INDIVIDUAL DE HUEVOS (Válido para cualquier evento)
--- ========================================================
-local function checkAndRegisterEgg(obj)
-    if not obj or not obj.Parent then return end
-    if isBlacklisted(obj.Name) or isBlacklisted(obj.Parent.Name) then return end
-    
-    -- Ignorar si está en tu propia base
-    local inMyBase = false
-    local p = obj.Parent
-    while p and p ~= workspace do
-        if string.find(string.lower(p.Name), string.lower(LocalPlayer.Name)) then
-            inMyBase = true
-            break
-        end
-        p = p.Parent
+-- Limpia "$36.21M/s" para mostrar "36.21M"
+local function cleanValueString(str)
+    if not str then return "1.0M" end
+    local clean = string.match(str, "[%d%.]+[KMBkmb]")
+    if clean then
+        return string.upper(clean)
     end
-    if inMyBase then return end
+    return str
+end
+
+-- ========================================================
+-- 1. MOTOR DE DETECCIÓN EXACTA DE HUEVOS (COMO LENNON HUB)
+-- ========================================================
+local function scanEggs()
+    local found = {}
     
-    -- Debe tener un ProximityPrompt para robarlo ("Steal", "Robar", "Take", etc.)
-    local prompt = obj:FindFirstChildOfClass("ProximityPrompt") or (obj.Parent and obj.Parent:FindFirstChildOfClass("ProximityPrompt"))
-    local hasSteal = false
-    if prompt then
-        local aText = string.lower((prompt.ActionText or "") .. " " .. (prompt.ObjectText or ""))
-        if isBlacklisted(aText) then return end
-        if string.find(aText, "steal") or string.find(aText, "robar") or string.find(aText, "take") or string.find(aText, "grab") or string.find(aText, "egg") or string.find(aText, "huevo") then
-            hasSteal = true
-        end
-    end
-    
-    -- Inspeccionar BillboardGui del huevo
-    local billboard = obj:FindFirstChildOfClass("BillboardGui") or (obj.Parent and obj.Parent:FindFirstChildOfClass("BillboardGui"))
-    local petName = nil
-    local rarity = nil
-    local valueStr = nil
-    
-    if billboard then
-        for _, label in pairs(billboard:GetDescendants()) do
-            if label:IsA("TextLabel") and label.Visible then
-                local txt = label.Text
-                -- Descartar si es mascota generando dinero por segundo
-                if string.find(txt, "/s") or string.find(txt, "/sec") then return end
+    for _, obj in pairs(workspace:GetDescendants()) do
+        -- Buscar ProximityPrompts reales de robo
+        if obj:IsA("ProximityPrompt") then
+            local prompt = obj
+            local pAction = string.lower(prompt.ActionText or "")
+            local pObject = string.lower(prompt.ObjectText or "")
+            
+            -- Verificar que sea para robar (Steal, Robar, Take, etc.)
+            local isStealPrompt = string.find(pAction, "steal") or string.find(pAction, "robar") or string.find(pAction, "take") or string.find(pAction, "grab") or string.find(pObject, "egg") or string.find(pObject, "huevo") or pAction == ""
+            
+            if isStealPrompt and not isBlacklisted(pAction) and not isBlacklisted(pObject) then
+                local eggModel = prompt.Parent
                 
-                -- Detectar rareza
-                for rName, _ in pairs(rarityColors) do
-                    if string.find(string.lower(txt), string.lower(rName)) then
-                        rarity = rName
+                -- Si el prompt está en "SmartPromptPart" o "Hitbox", el nombre real del huevo/pet está en su padre
+                local realPetName = eggModel.Name
+                if string.find(string.lower(realPetName), "prompt") or string.find(string.lower(realPetName), "hitbox") or string.find(string.lower(realPetName), "part") then
+                    if eggModel.Parent and eggModel.Parent ~= workspace then
+                        realPetName = eggModel.Parent.Name
+                        eggModel = eggModel.Parent
                     end
                 end
                 
-                -- Detectar multiplicador (ej: 28.02M)
-                if string.find(txt, "[%d%.]+[KMBkmb]") and not string.find(txt, "/s") then
-                    valueStr = txt
-                elseif string.len(txt) > 2 and not string.find(txt, "%d") and not rarity and not isBlacklisted(txt) then
-                    petName = txt
+                -- Descartar si está en tu propia base
+                local inMyBase = false
+                local checkP = eggModel.Parent
+                while checkP and checkP ~= workspace do
+                    if string.find(string.lower(checkP.Name), string.lower(LocalPlayer.Name)) then
+                        inMyBase = true
+                        break
+                    end
+                    checkP = checkP.Parent
+                end
+                
+                if not inMyBase and not isBlacklisted(realPetName) then
+                    -- Buscar BillboardGui con la rareza y el valor (ej: Cosmic, 36.21M)
+                    local detectedRarity = nil
+                    local detectedVal = nil
+                    
+                    local billboard = eggModel:FindFirstChildOfClass("BillboardGui") or (eggModel.Parent and eggModel.Parent:FindFirstChildOfClass("BillboardGui")) or eggModel:FindFirstChildWhichIsA("BillboardGui", true)
+                    
+                    if billboard then
+                        for _, label in pairs(billboard:GetDescendants()) do
+                            if label:IsA("TextLabel") and label.Visible then
+                                local txt = label.Text
+                                -- Detectar rareza (Cosmic, Secret, Eternal, Divine)
+                                for rName, _ in pairs(rarityColors) do
+                                    if string.find(string.lower(txt), string.lower(rName)) then
+                                        detectedRarity = rName
+                                    end
+                                end
+                                -- Detectar valor (ej: 36.21M o $36.21M/s)
+                                if string.find(txt, "[%d%.]+[KMBkmb]") then
+                                    detectedVal = cleanValueString(txt)
+                                end
+                            end
+                        end
+                    end
+                    
+                    -- Si no hay rareza por texto, revisar atributos
+                    if not detectedRarity then
+                        for rName, _ in pairs(rarityColors) do
+                            if eggModel:GetAttribute("Rarity") == rName or (eggModel.Parent and eggModel.Parent:GetAttribute("Rarity") == rName) then
+                                detectedRarity = rName
+                            end
+                        end
+                    end
+                    
+                    -- Rareza por defecto si es huevo cósmico / nido
+                    local finalRarity = detectedRarity or "Cosmic"
+                    
+                    if selectedRarities[finalRarity] then
+                        local targetPart = eggModel:IsA("BasePart") and eggModel or eggModel:FindFirstChildWhichIsA("BasePart") or prompt.Parent
+                        if targetPart and targetPart:IsA("BasePart") then
+                            local numVal = parseValue(detectedVal)
+                            table.insert(found, {
+                                name = realPetName,
+                                rarity = finalRarity,
+                                valueStr = detectedVal or "10.0M",
+                                numericValue = numVal > 0 and numVal or 10000000,
+                                instance = targetPart,
+                                prompt = prompt
+                            })
+                        end
+                    end
                 end
             end
         end
     end
     
-    -- Si tiene botón de robar o rareza confirmada
-    if hasSteal or rarity then
-        local targetPart = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart")
-        if targetPart then
-            local r = rarity or "Cosmic"
-            activeEggsMap[obj] = {
-                name = petName or obj.Name,
-                rarity = r,
-                valueStr = valueStr or "10.0M",
-                numericValue = parseValue(valueStr),
-                instance = targetPart
-            }
-            
-            -- Si el huevo desaparece o alguien lo roba, eliminarlo
-            obj.AncestryChanged:Connect(function(_, parent)
-                if not parent then
-                    activeEggsMap[obj] = nil
-                end
-            end)
-        end
-    end
-end
-
--- Función para ordenar los huevos activos
-local function updateSortedEggs()
-    local list = {}
-    for obj, data in pairs(activeEggsMap) do
-        if obj and obj.Parent and data.instance and data.instance.Parent then
-            if selectedRarities[data.rarity] then
-                table.insert(list, data)
-            end
-        else
-            activeEggsMap[obj] = nil
-        end
-    end
-    
-    table.sort(list, function(a, b)
+    -- Ordenar de mayor a menor valor
+    table.sort(found, function(a, b)
         return a.numericValue > b.numericValue
     end)
     
-    sortedEggsList = list
-    bestEgg = list[1]
+    currentEggs = found
+    bestEgg = found[1]
 end
 
 -- ========================================================
--- 2. ESCUCHA DE EVENTOS EN TIEMPO REAL (DescendantAdded)
--- ========================================================
--- Escaneo inicial rápido
-for _, item in pairs(workspace:GetDescendants()) do
-    if item:IsA("ProximityPrompt") or item:IsA("BillboardGui") then
-        checkAndRegisterEgg(item.Parent)
-    end
-end
-updateSortedEggs()
-
--- Escuchar CUALQUIER huevo nuevo que aparezca en el mapa en vivo
-workspace.DescendantAdded:Connect(function(newItem)
-    if newItem:IsA("ProximityPrompt") or newItem:IsA("BillboardGui") then
-        task.wait(0.1)
-        checkAndRegisterEgg(newItem.Parent)
-        updateSortedEggs()
-    end
-end)
-
--- ========================================================
--- 3. INTERFAZ GRÁFICA (LENNON HUB RÉPLICA)
+-- 2. INTERFAZ GRÁFICA RÉPLICA LENNON HUB
 -- ========================================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "LennonHubBestEgg"
@@ -529,7 +518,7 @@ local function createRarityPill(name, color, posX, posY)
             pill.BackgroundColor3 = Color3.fromRGB(15, 17, 16)
             pill.TextColor3 = Color3.fromRGB(80, 80, 80)
         end
-        updateSortedEggs()
+        scanEggs()
     end)
 end
 
@@ -539,12 +528,12 @@ createRarityPill("Eternal", rarityColors["Eternal"], 10, 188)
 createRarityPill("Divine", rarityColors["Divine"], 140, 188)
 
 -- ========================================================
--- 4. ACTUALIZACIÓN VISUAL Y TELEGUIADO
+-- 3. ACTUALIZACIÓN VISUAL DEL TOP
 -- ========================================================
 task.spawn(function()
     while true do
-        task.wait(0.5)
-        updateSortedEggs()
+        task.wait(0.8)
+        scanEggs()
         
         if bestEgg then
             EggNameLabel.Text = bestEgg.name
@@ -561,7 +550,7 @@ task.spawn(function()
             for _, child in pairs(ListScroll:GetChildren()) do
                 if child:IsA("Frame") then child:Destroy() end
             end
-            for idx, item in ipairs(sortedEggsList) do
+            for idx, item in ipairs(currentEggs) do
                 if idx <= 6 then
                     local row = Instance.new("Frame")
                     row.Size = UDim2.new(1, -4, 0, 24)
@@ -606,36 +595,67 @@ task.spawn(function()
     end
 end)
 
--- Bucle de Teleguiado Físico
+-- ========================================================
+-- 4. TELEGUIADO AÉREO ANTI-MUERTE (Ignora Trampas de Oso)
+-- ========================================================
+-- Noclip constante durante el teleguiado
+RunService.Stepped:Connect(function()
+    if teleguiadoActive and LocalPlayer.Character then
+        for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
+    end
+end)
+
 task.spawn(function()
     while true do
         task.wait(0.1)
         if teleguiadoActive and bestEgg and bestEgg.instance and bestEgg.instance.Parent then
             local char = LocalPlayer.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hum = char and char:FindFirstChild("Humanoid")
             
-            if hrp then
-                local targetPos = bestEgg.instance.Position + Vector3.new(0, 2.5, 0)
-                local dist = (targetPos - hrp.Position).Magnitude
+            if hrp and hum and hum.Health > 0 then
+                -- VUELO POR EL CIELO: Flotar a 12 studs sobre el suelo para NUNCA pisar trampas de oso
+                local eggPos = bestEgg.instance.Position
+                local safeHoverPos = eggPos + Vector3.new(0, 6.5, 0) -- Flotar justo arriba del pedestal
+                local skyTravelPos = Vector3.new(hrp.Position.X, eggPos.Y + 12, hrp.Position.Z)
                 
-                if dist > 5 then
+                -- Distancia horizontal
+                local horizontalDist = (Vector3.new(eggPos.X, 0, eggPos.Z) - Vector3.new(hrp.Position.X, 0, hrp.Position.Z)).Magnitude
+                
+                if horizontalDist > 4 then
+                    -- Subir al cielo y volar suavemente en línea recta hacia el nido
+                    local flyTarget = Vector3.new(eggPos.X, eggPos.Y + 10, eggPos.Z)
+                    local dir = (flyTarget - hrp.Position).Unit
+                    
                     if slowModeActive then
-                        local dir = (targetPos - hrp.Position).Unit
-                        hrp.Velocity = dir * 70
-                        hrp.CFrame = CFrame.new(hrp.Position, targetPos)
+                        hrp.Velocity = dir * 75
+                        hrp.CFrame = CFrame.new(hrp.Position, flyTarget)
                     else
-                        hrp.CFrame = CFrame.new(targetPos)
+                        hrp.CFrame = CFrame.new(flyTarget)
                     end
                 else
-                    local prompt = bestEgg.instance:FindFirstChildOfClass("ProximityPrompt") or bestEgg.instance.Parent:FindFirstChildOfClass("ProximityPrompt")
+                    -- Descender únicamente a 5 studs arriba del pedestal (seguro contra trampas)
+                    hrp.CFrame = CFrame.new(safeHoverPos)
+                    hrp.Velocity = Vector3.new(0, 0, 0)
+                    
+                    -- Activar ProximityPrompt aéreo
+                    local prompt = bestEgg.prompt or bestEgg.instance:FindFirstChildOfClass("ProximityPrompt")
                     if prompt and fireproximityprompt then
-                        fireproximityprompt(prompt)
+                        fireproximityprompt(prompt, 0)
                     end
+                    
                     if firetouchinterest then
                         firetouchinterest(hrp, bestEgg.instance, 0)
                         task.wait(0.05)
                         firetouchinterest(hrp, bestEgg.instance, 1)
                     end
+                    
+                    -- Elevarse de inmediato al cielo para no caer en trampas
+                    hrp.CFrame = hrp.CFrame + Vector3.new(0, 8, 0)
                     
                     if not loopActive then
                         teleguiadoActive = false
@@ -643,11 +663,11 @@ task.spawn(function()
                         SwitchDot.Position = UDim2.new(0, 2, 0, 2)
                         SwitchDot.BackgroundColor3 = Color3.fromRGB(150, 155, 150)
                     end
-                    task.wait(0.8)
+                    task.wait(1.0)
                 end
             end
         end
     end
 end)
 
-print("¡Lennon Hub Best Egg System (Event-Driven PRO) cargado!")
+print("¡Lennon Hub Best Egg System (V3 Anti-Muerte y Nombres Fix) cargado!")
