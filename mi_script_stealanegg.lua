@@ -1,27 +1,33 @@
 --[[
     ========================================================
-    STEAL AN EGG - LENNON HUB BEST EGG SYSTEM (V8 DEFINITIVO)
-    Descubierto con inspección directa del juego:
-    - RUTA REAL: Workspace.ClientRenderedAssets
-    - FILTRO DE BASE: Attr OwnerUserId o Nombre (UserId_UID)
-    - DATOS: BillboardGui.Data:
-        * DisplayName -> Nombre real (Holy Peacock, RazorFang, Rainbow Imp...)
-        * Odds / Rarity -> Rareza real (Cosmic, Secret, Eternal, Divine)
-        * PerSecond -> Multiplicador real ($360M/s, $54M/s -> 360M, 54M)
-    - ANTI-TRAMPAS & ANTI-GUARDIAS: Vuelo aéreo directo
+    STEAL AN EGG - LENNON HUB BEST EGG SYSTEM (V10 OFICIAL)
+    100% REPLICA NATIVA, SIN KEYS, SIN LAG, AUTOMÁTICO
+    - MOTOR OFICIAL: EggState.ReadFieldEggs() & EggRecords
+    - EXCLUSIVO DE LA LÍNEA: Lee los 58 huevos de la pista en vivo
+    - PREDICCIÓN ANTES DE ABRIR: Muestra la mascota real y su valor
+    - TELEGUIADO AÉREO: Vuelo aéreo anti-guardias y retorno seguro a base
     ========================================================
 ]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
--- Eliminar versión previa si existe
+-- Eliminar versión previa
 pcall(function()
     if game:GetService("CoreGui"):FindFirstChild("LennonHubBestEgg") then
         game:GetService("CoreGui").LennonHubBestEgg:Destroy()
     end
+end)
+
+-- Módulos Oficiales del Juego
+local EggState = nil
+local EggRecords = nil
+pcall(function()
+    EggState = require(ReplicatedStorage.Client.EggState)
+    EggRecords = require(ReplicatedStorage.Shared.Util.EggRecords)
 end)
 
 -- Variables de Estado
@@ -39,143 +45,119 @@ local selectedRarities = {
 
 local rarityColors = {
     ["Cosmic"] = Color3.fromRGB(138, 43, 226),   -- Púrpura
-    ["Secret"] = Color3.fromRGB(80, 80, 85),     -- Gris / Plata
+    ["Secret"] = Color3.fromRGB(120, 120, 130),  -- Gris
     ["Eternal"] = Color3.fromRGB(218, 24, 132),  -- Magenta
-    ["Divine"] = Color3.fromRGB(255, 215, 0)     -- Dorado / Amarillo
+    ["Divine"] = Color3.fromRGB(255, 215, 0)     -- Dorado
+}
+
+local areaToRarity = {
+    ["Cosmic"] = "Cosmic",
+    ["LightDark"] = "Divine",
+    ["Light Dark"] = "Divine",
+    ["TitanTemple"] = "Divine",
+    ["Titan Temple"] = "Divine",
+    ["CherryBlossom"] = "Eternal",
+    ["Cherry Blossom"] = "Eternal",
+    ["Volcano"] = "Secret",
+    ["Snow"] = "Secret",
+    ["Prehistoric"] = "Secret",
+    ["Desert"] = "Cosmic",
 }
 
 local currentEggs = {}
 local bestEgg = nil
 local myBasePosition = nil
 
--- Helpers de conversión
-local function parseValue(valStr)
-    if not valStr then return 0 end
-    local num = tonumber(string.match(valStr, "[%d%.]+"))
-    if not num then return 0 end
-    local upper = string.upper(valStr)
-    if string.find(upper, "B") then
-        return num * 1000000000
-    elseif string.find(upper, "M") then
-        return num * 1000000
-    elseif string.find(upper, "K") then
-        return num * 1000
+-- Detectar Base de Jose
+local function findMyBase()
+    if myBasePosition then return myBasePosition end
+    local myPlot = workspace:FindFirstChild(LocalPlayer.Name)
+    if myPlot and myPlot:IsA("Model") then
+        myBasePosition = myPlot:GetPivot().Position + Vector3.new(0, 4, 0)
+        return myBasePosition
     end
-    return num
-end
-
-local function cleanValueString(str)
-    if not str then return "25.0M" end
-    local clean = string.match(str, "[%d%.]+[KMBkmb]")
-    if clean then
-        return string.upper(clean)
-    end
-    local numOnly = string.match(str, "[%d%.]+")
-    return numOnly or str
-end
-
--- ========================================================
--- 1. DETECTOR REAL DE HUEVOS (Vía Workspace.ClientRenderedAssets)
--- ========================================================
-local function scanEggs()
-    local found = {}
-    local myUserId = tostring(LocalPlayer.UserId)
-    local assets = workspace:FindFirstChild("ClientRenderedAssets")
-    
-    if assets then
-        for _, child in pairs(assets:GetChildren()) do
-            -- 1. Identificar dueño del huevo
-            local ownerId = child:GetAttribute("OwnerUserId")
-            if not ownerId then
-                local parts = string.split(child.Name, "_")
-                ownerId = parts[1]
-            end
-            ownerId = tostring(ownerId or "")
-            
-            -- Detectar posición de mi propia base si encontramos nuestros huevos
-            if ownerId == myUserId then
-                local myCenter = child:FindFirstChild("CENTER") or child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
-                if myCenter then
-                    myBasePosition = myCenter.Position + Vector3.new(0, 5, 0)
-                end
-            else
-                -- Es un huevo enemigo disponible para robar
-                local dataGui = child:FindFirstChild("Data") or child:FindFirstChildWhichIsA("BillboardGui")
-                if dataGui then
-                    local nameLabel = dataGui:FindFirstChild("DisplayName")
-                    local oddsLabel = dataGui:FindFirstChild("Odds")
-                    local rarityLabel = dataGui:FindFirstChild("Rarity")
-                    local perSecLabel = dataGui:FindFirstChild("PerSecond")
-                    
-                    local petName = (nameLabel and nameLabel.Text ~= "") and nameLabel.Text or "Egg"
-                    
-                    -- Obtener rareza real
-                    local rawOdds = oddsLabel and oddsLabel.Text or ""
-                    local rawRarity = rarityLabel and rarityLabel.Text or ""
-                    local petRarity = "Cosmic"
-                    
-                    if rawOdds ~= "" then
-                        petRarity = rawOdds
-                    elseif rawRarity ~= "" then
-                        petRarity = rawRarity
-                    end
-                    
-                    -- Normalizar rareza (Cosmic, Secret, Eternal, Divine)
-                    for rKey, _ in pairs(rarityColors) do
-                        if string.find(string.lower(petRarity), string.lower(rKey)) then
-                            petRarity = rKey
-                            break
-                        end
-                    end
-                    
-                    local valText = perSecLabel and perSecLabel.Text or "$25M/s"
-                    local cleanVal = cleanValueString(valText)
-                    local numVal = parseValue(valText)
-                    
-                    -- Parte física para posicionarse
-                    local hitPart = child:FindFirstChild("CENTER") or child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
-                    
-                    -- ProximityPrompt para robar
-                    local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
-                    if not prompt and hitPart then
-                        -- Buscar en el pedestal o alrededores (a menos de 15 studs)
-                        for _, p in pairs(workspace:GetDescendants()) do
-                            if p:IsA("ProximityPrompt") and p.Parent and p.Parent:IsA("BasePart") then
-                                if (p.Parent.Position - hitPart.Position).Magnitude < 15 then
-                                    prompt = p
-                                    break
-                                end
-                            end
-                        end
-                    end
-                    
-                    -- Buscar textura o imagen si existe
-                    local petImage = nil
-                    local decal = child:FindFirstChildWhichIsA("Decal", true)
-                    if decal and decal.Texture ~= "" then
-                        petImage = decal.Texture
-                    end
-                    
-                    -- Filtrar por las rarezas seleccionadas
-                    if selectedRarities[petRarity] and hitPart then
-                        table.insert(found, {
-                            name = petName,
-                            rarity = petRarity,
-                            valueStr = cleanVal,
-                            numericValue = numVal > 0 and numVal or 25000000,
-                            instance = hitPart,
-                            prompt = prompt,
-                            image = petImage
-                        })
-                    end
-                end
+    -- Buscar por Plots
+    local plots = workspace:FindFirstChild("Plots")
+    if plots then
+        for _, p in pairs(plots:GetChildren()) do
+            if string.find(string.lower(p.Name), string.lower(LocalPlayer.Name)) then
+                myBasePosition = (p:IsA("Model") and p:GetPivot().Position or p.Position) + Vector3.new(0, 4, 0)
+                return myBasePosition
             end
         end
     end
+    -- Fallback: Spawn o posición inicial
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        myBasePosition = LocalPlayer.Character.HumanoidRootPart.Position
+    end
+    return myBasePosition
+end
+
+-- Formateador de Números
+local function formatNumber(num)
+    if not num then return "0" end
+    if num >= 1000000000 then
+        return string.format("%.2fB", num / 1000000000)
+    elseif num >= 1000000 then
+        return string.format("%.2fM", num / 1000000)
+    elseif num >= 1000 then
+        return string.format("%.1fK", num / 1000)
+    end
+    return tostring(num)
+end
+
+-- ========================================================
+-- 1. DETECTOR REAL OFICIAL (VIA EGGSTATE.READFIELDEGGS)
+-- ========================================================
+local function scanEggs()
+    if not EggState or not EggRecords then return end
     
-    -- Ordenar de mayor a menor valor
+    local ok, fieldData = pcall(function() return EggState.ReadFieldEggs() end)
+    if not ok or not fieldData or not fieldData.Records then return end
+    
+    local found = {}
+    local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
+    
+    for _, rec in pairs(fieldData.Records) do
+        local price = 0
+        pcall(function() price = EggRecords.SellPrice(rec) end)
+        
+        local petName = rec.AssetCategory or EggRecords.DisplayName(rec) or "Egg"
+        local area = rec.AreaId or "Common"
+        local rarity = areaToRarity[area] or "Cosmic"
+        
+        -- Obtener posición física en 3D
+        local eggPos = nil
+        if rec.BoundsCFrame then
+            eggPos = rec.BoundsCFrame.Position
+        elseif rec.BottomCFrame then
+            eggPos = rec.BottomCFrame.Position
+        end
+        
+        -- Buscar hitbox físico en AreaEggSlotsClient
+        local hitPart = nil
+        if slotsFolder and rec.Uid and slotsFolder:FindFirstChild(rec.Uid) then
+            local model = slotsFolder[rec.Uid]
+            hitPart = model:FindFirstChild("Hitbox") or model:FindFirstChildWhichIsA("BasePart")
+        end
+        
+        if selectedRarities[rarity] then
+            table.insert(found, {
+                name = petName,
+                area = area,
+                rarity = rarity,
+                price = price,
+                valueStr = formatNumber(price),
+                pos = eggPos,
+                hitPart = hitPart,
+                uid = rec.Uid
+            })
+        end
+    end
+    
+    -- Ordenar por valor real
     table.sort(found, function(a, b)
-        return a.numericValue > b.numericValue
+        return a.price > b.price
     end)
     
     currentEggs = found
@@ -183,7 +165,7 @@ local function scanEggs()
 end
 
 -- ========================================================
--- 2. CONSTRUCCIÓN DE INTERFAZ GRÁFICA (IDÉNTICA A LENNON HUB)
+-- 2. INTERFAZ GRÁFICA (IDÉNTICA A LENNON HUB)
 -- ========================================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "LennonHubBestEgg"
@@ -514,11 +496,12 @@ SlowToggleBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ========================================================
--- 3. BUCLE DE ACTUALIZACIÓN EN VIVO DE LA INTERFAZ
+-- 3. BUCLE DE ACTUALIZACIÓN EN VIVO (CERO LAG, 60 FPS)
 -- ========================================================
 task.spawn(function()
+    findMyBase()
     while true do
-        task.wait(0.8)
+        task.wait(0.5)
         scanEggs()
         
         if bestEgg then
@@ -526,9 +509,6 @@ task.spawn(function()
             EggRarityLabel.Text = bestEgg.rarity
             EggRarityLabel.TextColor3 = rarityColors[bestEgg.rarity] or Color3.fromRGB(255, 255, 255)
             EggValueLabel.Text = bestEgg.valueStr
-            if bestEgg.image then
-                EggIconImg.Image = bestEgg.image
-            end
         else
             EggNameLabel.Text = "NO EGG FOUND"
             EggRarityLabel.Text = "--"
@@ -585,7 +565,7 @@ task.spawn(function()
 end)
 
 -- ========================================================
--- 4. TELEGUIADO AÉREO ANTI-GUARDIAS Y ANTI-TRAMPAS
+-- 4. TELEGUIADO AÉREO ANTI-GUARDIAS Y RETORNO A BASE
 -- ========================================================
 RunService.Stepped:Connect(function()
     if teleguiadoActive and LocalPlayer.Character then
@@ -600,54 +580,63 @@ end)
 task.spawn(function()
     while true do
         task.wait(0.1)
-        if teleguiadoActive and bestEgg and bestEgg.instance and bestEgg.instance.Parent then
+        if teleguiadoActive and bestEgg and bestEgg.pos then
             local char = LocalPlayer.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local hum = char and char:FindFirstChild("Humanoid")
             
             if hrp and hum and hum.Health > 0 then
-                local eggPos = bestEgg.instance.Position
-                local safeHoverPos = eggPos + Vector3.new(0, 5.0, 0)
+                local eggPos = bestEgg.pos
+                local safeHoverPos = eggPos + Vector3.new(0, 4.5, 0)
                 local horizontalDist = (Vector3.new(eggPos.X, 0, eggPos.Z) - Vector3.new(hrp.Position.X, 0, hrp.Position.Z)).Magnitude
                 
                 if horizontalDist > 4 then
-                    -- Vuelo alto (Y + 20 studs) para evitar trampas de oso y guardias
-                    local skyTarget = Vector3.new(eggPos.X, eggPos.Y + 18, eggPos.Z)
+                    -- Vuelo alto por el cielo (Y + 20 studs) para no tocar guardias ni trampas
+                    local skyTarget = Vector3.new(eggPos.X, eggPos.Y + 20, eggPos.Z)
                     local dir = (skyTarget - hrp.Position).Unit
                     
                     if slowModeActive then
-                        hrp.Velocity = dir * 85
+                        hrp.Velocity = dir * 90
                         hrp.CFrame = CFrame.new(hrp.Position, skyTarget)
                     else
                         hrp.CFrame = CFrame.new(skyTarget)
                     end
                 else
-                    -- Flotación directa encima del huevo
+                    -- Descender flotando directamente sobre el huevo
                     hrp.CFrame = CFrame.new(safeHoverPos)
                     hrp.Velocity = Vector3.new(0, 0, 0)
                     
-                    -- Activar prompt
-                    local prompt = bestEgg.prompt or bestEgg.instance:FindFirstChildOfClass("ProximityPrompt")
-                    if prompt and fireproximityprompt then
-                        fireproximityprompt(prompt, 0)
-                    end
-                    
-                    if firetouchinterest then
-                        firetouchinterest(hrp, bestEgg.instance, 0)
+                    -- Activar robo
+                    -- 1. Si tenemos Hitbox físico en AreaEggSlotsClient
+                    if bestEgg.hitPart and firetouchinterest then
+                        firetouchinterest(hrp, bestEgg.hitPart, 0)
                         task.wait(0.05)
-                        firetouchinterest(hrp, bestEgg.instance, 1)
+                        firetouchinterest(hrp, bestEgg.hitPart, 1)
                     end
                     
-                    -- ESCAPE AÉREO INMEDIATO: Subir 30 studs para evadir GuardComponent
+                    -- 2. Activar prompt cercano de Steal
+                    for _, p in pairs(workspace:GetDescendants()) do
+                        if p:IsA("ProximityPrompt") and p.Parent and p.Parent:IsA("BasePart") then
+                            if (p.Parent.Position - eggPos).Magnitude < 8 then
+                                if fireproximityprompt then
+                                    fireproximityprompt(p, 0)
+                                end
+                                break
+                            end
+                        end
+                    end
+                    
+                    -- ESCAPE AÉREO INMEDIATO: Subir 30 studs por el cielo para evadir a los guardias ("¡¡CORRE!!")
                     hrp.CFrame = hrp.CFrame + Vector3.new(0, 25, 0)
                     
-                    -- Navegar de vuelta a la base del jugador por el aire
-                    if myBasePosition then
+                    -- Regreso a la base de Jose
+                    local home = findMyBase()
+                    if home then
                         task.wait(0.2)
-                        local escapeSky = Vector3.new(myBasePosition.X, hrp.Position.Y, myBasePosition.Z)
-                        hrp.CFrame = CFrame.new(escapeSky)
+                        local skyHome = Vector3.new(home.X, hrp.Position.Y, home.Z)
+                        hrp.CFrame = CFrame.new(skyHome)
                         task.wait(0.3)
-                        hrp.CFrame = CFrame.new(myBasePosition)
+                        hrp.CFrame = CFrame.new(home)
                     end
                     
                     if not loopActive then
@@ -663,4 +652,4 @@ task.spawn(function()
     end
 end)
 
-print("¡Lennon Hub Best Egg System (V8 DEFINITIVO) cargado con éxito!")
+print("¡Lennon Hub Best Egg System (V10 OFICIAL) cargado con éxito!")
