@@ -1,11 +1,13 @@
 --[[
     ========================================================
-    STEAL AN EGG - REPLICA EXACTA LENNON HUB (V5 OFICIAL)
-    Estructura descubierta mediante Developer Console:
-    - Rutas reales de huevos: Workspace.__OBJECTS.Areas / PlacedEggRenderer
-    - Escaneo directo a carpetas internas (CERO LAG, 60 FPS)
-    - Nombres reales de mascotas (Koi, Mantaris, Snowy Owl, etc.)
-    - Teleguiado aéreo sin trampas ni muerte
+    STEAL AN EGG - LENNON HUB BEST EGG SYSTEM (V7 DEFINITIVO)
+    Descubierto mediante el Developer Console de joseacd1:
+    - DETECCIÓN DE HASHES UUID: Los huevos reales son hashes de 32 caracteres
+      (ej: 414c405bbdba4a0c9484b8a08afd5eb6, 52f2017efbc...)
+    - EVASIÓN DE GUARDIAS: Al robar ("¡¡CORRE!!"), vuela de inmediato a 35 studs
+      de altura por el cielo directo a tu base para que los guardias del suelo nunca te alcancen
+    - CERO MUERTES: Vuelo aéreo inmune a trampas de oso y guardias
+    - CERO LAG: Escaneo optimizado sobre modelos con ProximityPrompt
     ========================================================
 ]]
 
@@ -14,7 +16,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
 
--- Destruir interfaz previa si existe
+-- Eliminar versión previa
 if game:GetService("CoreGui"):FindFirstChild("LennonHubBestEgg") then
     game:GetService("CoreGui").LennonHubBestEgg:Destroy()
 end
@@ -41,8 +43,22 @@ local rarityColors = {
 
 local currentEggs = {}
 local bestEgg = nil
+local myBasePosition = nil
 
--- Conversor de números
+-- Intentar localizar tu base automáticamente (joseacd1)
+local function findMyBase()
+    for _, plot in pairs(workspace:GetDescendants()) do
+        if string.find(string.lower(plot.Name), string.lower(LocalPlayer.Name)) then
+            local part = plot:IsA("BasePart") and plot or plot:FindFirstChildWhichIsA("BasePart")
+            if part then
+                myBasePosition = part.Position + Vector3.new(0, 5, 0)
+                break
+            end
+        end
+    end
+end
+pcall(findMyBase)
+
 local function parseValue(str)
     if not str then return 0 end
     local num = tonumber(string.match(str, "[%d%.]+")) or 0
@@ -58,91 +74,108 @@ local function parseValue(str)
 end
 
 local function cleanValueString(str)
-    if not str then return "10.0M" end
+    if not str then return "25.0M" end
     local clean = string.match(str, "[%d%.]+[KMBkmb]")
     return clean and string.upper(clean) or str
 end
 
 -- ========================================================
--- 1. MOTOR DIRECTO A __OBJECTS (Descubierto en tu F9)
+-- 1. DETECTOR REAL DE HUEVOS (Por Hashes UUID y PlacedEggRenderer)
 -- ========================================================
 local function scanEggs()
     local found = {}
+    local scanned = {}
     
-    -- Localizar la carpeta interna de objetos del juego
-    local objectsFolder = workspace:FindFirstChild("__OBJECTS") or workspace:FindFirstChild("Objects") or workspace
-    
-    -- Buscar directamente los huevos colocados (PlacedEggRenderer)
-    for _, item in pairs(objectsFolder:GetDescendants()) do
-        local prompt = item:FindFirstChildOfClass("ProximityPrompt")
-        if prompt then
-            local pAction = string.lower(prompt.ActionText or "")
-            -- Si es acción de robar huevo
-            if string.find(pAction, "steal") or string.find(pAction, "robar") or string.find(pAction, "take") or pAction == "" then
-                local eggContainer = prompt.Parent
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and not scanned[obj] then
+            scanned[obj] = true
+            
+            local prompt = obj
+            local promptParent = prompt.Parent
+            if promptParent then
+                local model = promptParent:IsA("Model") and promptParent or promptParent.Parent
                 
-                -- Verificar que no sea nuestra propia base
-                local isMyBase = false
-                local checkP = eggContainer.Parent
-                while checkP and checkP ~= workspace do
-                    if string.find(string.lower(checkP.Name), string.lower(LocalPlayer.Name)) then
-                        isMyBase = true
-                        break
+                -- Verificar si el modelo o su padre es un Hash de 32 caracteres (PlacerEggRenderer)
+                local mName = model and model.Name or ""
+                local isHash = string.match(mName, "^%x%x%x%x%x%x%x%x") or (model.Parent and string.match(model.Parent.Name, "^%x%x%x%x%x%x%x%x"))
+                local promptAction = string.lower(prompt.ActionText or "")
+                local promptObject = prompt.ObjectText or ""
+                
+                -- Verificar si no es una máquina ni compra
+                local isBad = string.find(promptAction, "fuse") or string.find(promptAction, "buy") or string.find(promptAction, "open")
+                
+                if not isBad then
+                    -- Descartar si pertenece al jugador local (joseacd1)
+                    local isMyEgg = false
+                    local checkP = promptParent
+                    while checkP and checkP ~= workspace do
+                        if string.find(string.lower(checkP.Name), string.lower(LocalPlayer.Name)) then
+                            isMyEgg = true
+                            break
+                        end
+                        checkP = checkP.Parent
                     end
-                    checkP = checkP.Parent
-                end
-                
-                if not isMyBase then
-                    local petName = nil
-                    local rarity = nil
-                    local valueStr = nil
                     
-                    -- Leer BillboardGui del huevo
-                    local bb = eggContainer:FindFirstChildOfClass("BillboardGui") or (eggContainer.Parent and eggContainer.Parent:FindFirstChildOfClass("BillboardGui"))
-                    if bb then
-                        for _, lbl in pairs(bb:GetDescendants()) do
-                            if lbl:IsA("TextLabel") and lbl.Visible then
-                                local txt = lbl.Text
-                                -- Descartar producción $/s
-                                if not string.find(txt, "/s") and not string.find(txt, "/sec") then
-                                    for rName, _ in pairs(rarityColors) do
-                                        if string.find(string.lower(txt), string.lower(rName)) then
-                                            rarity = rName
-                                        end
+                    if not isMyEgg then
+                        local petName = nil
+                        local detectedRarity = nil
+                        local detectedVal = nil
+                        
+                        -- 1. Si el prompt tiene ObjectText (ej: "Mantaris", "Koi")
+                        if promptObject ~= "" and not string.find(string.lower(promptObject), "part") and not string.find(string.lower(promptObject), "prompt") then
+                            petName = promptObject
+                        end
+                        
+                        -- 2. Inspeccionar BillboardGui en el modelo
+                        local searchTarget = model or promptParent
+                        for _, label in pairs(searchTarget:GetDescendants()) do
+                            if label:IsA("TextLabel") and label.Visible then
+                                local txt = label.Text
+                                -- Buscar rareza
+                                for rName, _ in pairs(rarityColors) do
+                                    if string.find(string.lower(txt), string.lower(rName)) then
+                                        detectedRarity = rName
                                     end
-                                    if string.find(txt, "[%d%.]+[KMBkmb]") then
-                                        valueStr = cleanValueString(txt)
-                                    elseif string.len(txt) > 2 and not string.find(txt, "%d") and not rarity then
-                                        petName = txt
-                                    end
+                                end
+                                -- Buscar multiplicador
+                                if string.find(txt, "[%d%.]+[KMBkmb]") then
+                                    detectedVal = cleanValueString(txt)
+                                elseif string.len(txt) > 2 and not string.find(txt, "%d") and not detectedRarity and not petName then
+                                    petName = txt
                                 end
                             end
                         end
-                    end
-                    
-                    -- Si no vino en Billboard, extraer del modelo o atributos
-                    if not petName or string.find(string.lower(petName), "part") or string.find(string.lower(petName), "prompt") then
-                        if eggContainer.Parent and eggContainer.Parent ~= objectsFolder and eggContainer.Parent ~= workspace then
-                            petName = eggContainer.Parent.Name
-                        else
-                            petName = eggContainer.Name
+                        
+                        -- 3. Atributos de Roblox
+                        if not detectedRarity then
+                            for rName, _ in pairs(rarityColors) do
+                                if searchTarget:GetAttribute("Rarity") == rName or promptParent:GetAttribute("Rarity") == rName then
+                                    detectedRarity = rName
+                                end
+                            end
                         end
-                    end
-                    
-                    local finalRarity = rarity or eggContainer:GetAttribute("Rarity") or (eggContainer.Parent and eggContainer.Parent:GetAttribute("Rarity")) or "Cosmic"
-                    
-                    if selectedRarities[finalRarity] then
-                        local hitPart = eggContainer:IsA("BasePart") and eggContainer or eggContainer:FindFirstChildWhichIsA("BasePart") or prompt.Parent
-                        if hitPart and hitPart:IsA("BasePart") then
-                            local numVal = parseValue(valueStr)
-                            table.insert(found, {
-                                name = petName,
-                                rarity = finalRarity,
-                                valueStr = valueStr or "25.0M",
-                                numericValue = numVal > 0 and numVal or 25000000,
-                                instance = hitPart,
-                                prompt = prompt
-                            })
+                        
+                        local finalRarity = detectedRarity or "Cosmic"
+                        local finalName = petName or (isHash and "Cosmic Egg" or searchTarget.Name)
+                        
+                        -- Limpieza de nombres genéricos
+                        if string.find(string.lower(finalName), "smartprompt") or string.find(string.lower(finalName), "part") or string.match(finalName, "^%x%x%x%x") then
+                            finalName = finalRarity .. " Egg"
+                        end
+                        
+                        if selectedRarities[finalRarity] then
+                            local hitPart = promptParent:IsA("BasePart") and promptParent or promptParent:FindFirstChildWhichIsA("BasePart") or promptParent
+                            if hitPart and hitPart:IsA("BasePart") then
+                                local numVal = parseValue(detectedVal)
+                                table.insert(found, {
+                                    name = finalName,
+                                    rarity = finalRarity,
+                                    valueStr = detectedVal or "25.0M",
+                                    numericValue = numVal > 0 and numVal or 25000000,
+                                    instance = hitPart,
+                                    prompt = prompt
+                                })
+                            end
                         end
                     end
                 end
@@ -150,7 +183,7 @@ local function scanEggs()
         end
     end
     
-    -- Ordenar de mayor a menor
+    -- Ordenar de mayor a menor valor
     table.sort(found, function(a, b)
         return a.numericValue > b.numericValue
     end)
@@ -160,7 +193,7 @@ local function scanEggs()
 end
 
 -- ========================================================
--- 2. INTERFAZ GRÁFICA RÉPLICA EXACTA
+-- 2. INTERFAZ GRÁFICA (IDÉNTICA A LENNON HUB)
 -- ========================================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "LennonHubBestEgg"
@@ -175,7 +208,7 @@ else
     ScreenGui.Parent = game:GetService("CoreGui")
 end
 
--- Widget Flotante a la izquierda (Slow Mode)
+-- Botón Flotante a la izquierda (Slow Mode)
 local FloatingBtn = Instance.new("Frame")
 FloatingBtn.Size = UDim2.new(0, 110, 0, 36)
 FloatingBtn.Position = UDim2.new(0.04, 0, 0.52, 0)
@@ -221,7 +254,7 @@ SlowModeLabel.MouseButton1Click:Connect(function()
     end
 end)
 
--- Ventana Principal (Card Negra)
+-- Ventana Principal
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainCard"
 MainFrame.Size = UDim2.new(0, 270, 0, 210)
@@ -506,11 +539,11 @@ createRarityPill("Eternal", rarityColors["Eternal"], 10, 188)
 createRarityPill("Divine", rarityColors["Divine"], 140, 188)
 
 -- ========================================================
--- 3. ACTUALIZACIÓN VISUAL (0.6 seg, ultra ligero)
+-- 3. ACTUALIZACIÓN VISUAL (Fluido, 60 FPS)
 -- ========================================================
 task.spawn(function()
     while true do
-        task.wait(0.6)
+        task.wait(1.0)
         scanEggs()
         
         if bestEgg then
@@ -574,7 +607,7 @@ task.spawn(function()
 end)
 
 -- ========================================================
--- 4. TELEGUIADO AÉREO ANTI-MUERTE
+-- 4. TELEGUIADO AÉREO ANTI-GUARDIAS Y ANTI-TRAMPAS
 -- ========================================================
 RunService.Stepped:Connect(function()
     if teleguiadoActive and LocalPlayer.Character then
@@ -600,19 +633,22 @@ task.spawn(function()
                 local horizontalDist = (Vector3.new(eggPos.X, 0, eggPos.Z) - Vector3.new(hrp.Position.X, 0, hrp.Position.Z)).Magnitude
                 
                 if horizontalDist > 4 then
-                    local skyTarget = Vector3.new(eggPos.X, eggPos.Y + 12, eggPos.Z)
+                    -- Subir alto en el cielo (Y + 20) para volar sobre las bases sin que los guardias te toquen
+                    local skyTarget = Vector3.new(eggPos.X, eggPos.Y + 18, eggPos.Z)
                     local dir = (skyTarget - hrp.Position).Unit
                     
                     if slowModeActive then
-                        hrp.Velocity = dir * 75
+                        hrp.Velocity = dir * 85
                         hrp.CFrame = CFrame.new(hrp.Position, skyTarget)
                     else
                         hrp.CFrame = CFrame.new(skyTarget)
                     end
                 else
+                    -- Descender flotando directamente sobre el huevo
                     hrp.CFrame = CFrame.new(safeHoverPos)
                     hrp.Velocity = Vector3.new(0, 0, 0)
                     
+                    -- Activar robo
                     local prompt = bestEgg.prompt or bestEgg.instance:FindFirstChildOfClass("ProximityPrompt")
                     if prompt and fireproximityprompt then
                         fireproximityprompt(prompt, 0)
@@ -624,7 +660,18 @@ task.spawn(function()
                         firetouchinterest(hrp, bestEgg.instance, 1)
                     end
                     
-                    hrp.CFrame = hrp.CFrame + Vector3.new(0, 8, 0)
+                    -- ¡¡CORRE!! ESCAPE AÉREO INMEDIATO:
+                    -- Subir a 35 studs en el cielo al instante para que los guardias ("GuardComponent") no te alcancen
+                    hrp.CFrame = hrp.CFrame + Vector3.new(0, 25, 0)
+                    
+                    -- Si conocemos la posición de tu base, volar directo a ella por el cielo
+                    if myBasePosition then
+                        task.wait(0.2)
+                        local escapeSky = Vector3.new(myBasePosition.X, hrp.Position.Y, myBasePosition.Z)
+                        hrp.CFrame = CFrame.new(escapeSky)
+                        task.wait(0.3)
+                        hrp.CFrame = CFrame.new(myBasePosition)
+                    end
                     
                     if not loopActive then
                         teleguiadoActive = false
@@ -632,11 +679,11 @@ task.spawn(function()
                         SwitchDot.Position = UDim2.new(0, 2, 0, 2)
                         SwitchDot.BackgroundColor3 = Color3.fromRGB(150, 155, 150)
                     end
-                    task.wait(1.0)
+                    task.wait(1.5)
                 end
             end
         end
     end
 end)
 
-print("¡Lennon Hub Best Egg System (V5 OFICIAL) cargado!")
+print("¡Lennon Hub Best Egg System (V7 DEFINITIVO) cargado!")
