@@ -1,15 +1,16 @@
 --[[
     ========================================================
-    STEAL AN EGG - LENNON HUB BEST EGG SYSTEM (V12 EXACTA)
-    - FILTRO EXACTO:
-        * Tocar una rareza selecciona SOLO esa rareza
-        * Si no hay ninguna seleccionada (o tocas la misma), APARECEN TODOS
-    - UI PERFECTA SIN TRASLAPE:
-        * Al abrir la lista, el contenedor de Teleguiado baja automáticamente
-        * Filas completas con #Rank, Nombre, Rareza coloreada y Valor
-    - DATOS OFICIALES DE PISTA:
-        * 100% sincronizado con EggState.ReadFieldEggs()
-        * Con Cosmic muestra exactamente Imp 56.9M, Demon Hound 24.76M, etc.
+    STEAL AN EGG - LENNON HUB BEST EGG SYSTEM (V13 PERFECCIÓN)
+    - SISTEMA DE MINIMIZAR:
+        * Botón "X" en la esquina superior derecha para minimizar
+        * Botón circular flotante draggable para abrir / cerrar en cualquier momento
+    - FILTROS EXACTOS A LENNON HUB:
+        * Viene con "Cosmic" activo por defecto (#1 Imp 56.9M, #2 Demon Hound 24.76M)
+        * Al tocar otra rareza, se selecciona SOLO esa (modo radio)
+        * Si tocas la misma rareza activa para apagarla, APARECEN TODOS
+    - LISTA DESPLEGABLE DINÁMICA:
+        * Al abrir con "v", MainFrame crece y empuja Teleguiado hacia abajo (cero traslape)
+        * Lista limpia con #Rank, Nombre, Rareza coloreada y Precio
     - TELEGUIADO AÉREO ANTI-GUARDIAS CON REGRESO A BASE
     ========================================================
 ]]
@@ -41,7 +42,7 @@ local loopActive = false
 local slowModeActive = true
 local expandedList = false
 
--- Filtro: nil = APARECEN TODOS, o nombre de rareza ("Cosmic", "Secret", "Eternal", "Divine")
+-- Filtro: "Cosmic" por defecto (igual que Lennon Hub). Si es nil, APARECEN TODOS
 local activeRarityFilter = "Cosmic"
 
 local rarityColors = {
@@ -65,11 +66,9 @@ local rarityBgInactive = {
     ["Divine"] = Color3.fromRGB(28, 24, 12)
 }
 
--- Mapeo de Área oficial del juego a Rareza
+-- Mapeo de Área oficial a Rareza
 local function getRarityFromRecord(rec)
     local area = string.lower(tostring(rec.AreaId or ""))
-    local cat = string.lower(tostring(rec.AssetCategory or ""))
-    
     if string.find(area, "cosmic") then
         return "Cosmic"
     elseif string.find(area, "light") or string.find(area, "dark") or string.find(area, "titan") or string.find(area, "divine") then
@@ -109,7 +108,7 @@ local function findMyBase()
     return myBasePosition
 end
 
--- Formateador Numérico (Lennon Hub: 56.9M, 24.76M, etc.)
+-- Formateador Numérico exacto a Lennon Hub (56.9M, 24.76M, etc.)
 local function formatNumber(num)
     if not num or num == 0 then return "0" end
     if num >= 1000000000 then
@@ -145,8 +144,8 @@ local function scanEggs()
         if model then
             local rarity = getRarityFromRecord(rec)
             
-            -- Si no hay filtro (activeRarityFilter == nil), APARECEN TODOS
-            -- Si hay filtro, solo los que coincidan con la rareza activa
+            -- Si activeRarityFilter == nil, APARECEN TODOS
+            -- Si tiene valor, filtra solo por esa categoría
             if activeRarityFilter == nil or rarity == activeRarityFilter then
                 local price = 0
                 pcall(function() price = EggRecords.SellPrice(rec) end)
@@ -178,7 +177,7 @@ local function scanEggs()
 end
 
 -- ========================================================
--- 2. CONSTRUCCIÓN DE INTERFAZ GRÁFICA (SIN TRASLAPE)
+-- 2. CONSTRUCCIÓN DE INTERFAZ GRÁFICA CON MINIMIZAR
 -- ========================================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "LennonHubBestEgg"
@@ -188,6 +187,22 @@ ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 local targetGui = game:GetService("CoreGui")
 if gethui then pcall(function() targetGui = gethui() end) end
 ScreenGui.Parent = targetGui
+
+-- Botón Flotante Circular para Abrir / Minimizar (Logo Lennon Hub)
+local ToggleButton = Instance.new("ImageButton")
+ToggleButton.Name = "LennonHubToggle"
+ToggleButton.Size = UDim2.new(0, 42, 0, 42)
+ToggleButton.Position = UDim2.new(0.02, 0, 0.45, 0)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(16, 20, 18)
+ToggleButton.BorderSizePixel = 0
+ToggleButton.Image = "rbxassetid://10849911500"
+ToggleButton.Active = true
+ToggleButton.Draggable = true
+ToggleButton.Parent = ScreenGui
+Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(1, 0)
+local ToggleStroke = Instance.new("UIStroke", ToggleButton)
+ToggleStroke.Color = Color3.fromRGB(45, 180, 85)
+ToggleStroke.Thickness = 1.5
 
 -- Marco Principal
 local MainFrame = Instance.new("Frame")
@@ -210,9 +225,14 @@ MainStroke.Color = Color3.fromRGB(28, 48, 36)
 MainStroke.Thickness = 1.2
 MainStroke.Parent = MainFrame
 
+-- Al tocar el botón flotante: Abre o Cierra el menú
+ToggleButton.MouseButton1Click:Connect(function()
+    MainFrame.Visible = not MainFrame.Visible
+end)
+
 -- Encabezado
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -30, 0, 18)
+TitleLabel.Size = UDim2.new(1, -60, 0, 18)
 TitleLabel.Position = UDim2.new(0, 14, 0, 8)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "LENNON HUB"
@@ -222,16 +242,45 @@ TitleLabel.TextSize = 13
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = MainFrame
 
+local VersionBadge = Instance.new("TextLabel")
+VersionBadge.Size = UDim2.new(0, 38, 0, 14)
+VersionBadge.Position = UDim2.new(0, 106, 0, 10)
+VersionBadge.BackgroundColor3 = Color3.fromRGB(28, 55, 38)
+VersionBadge.BorderSizePixel = 0
+VersionBadge.Text = "V13.0"
+VersionBadge.TextColor3 = Color3.fromRGB(80, 240, 120)
+VersionBadge.Font = Enum.Font.GothamBold
+VersionBadge.TextSize = 8
+VersionBadge.Parent = MainFrame
+Instance.new("UICorner", VersionBadge).CornerRadius = UDim.new(0, 4)
+
 local SubTitleLabel = Instance.new("TextLabel")
-SubTitleLabel.Size = UDim2.new(1, -30, 0, 12)
+SubTitleLabel.Size = UDim2.new(1, -60, 0, 12)
 SubTitleLabel.Position = UDim2.new(0, 14, 0, 26)
 SubTitleLabel.BackgroundTransparency = 1
-SubTitleLabel.Text = "BEST EGG SYSTEM"
+SubTitleLabel.Text = "BEST EGG SYSTEM • V13.0"
 SubTitleLabel.TextColor3 = Color3.fromRGB(140, 150, 140)
 SubTitleLabel.Font = Enum.Font.Gotham
 SubTitleLabel.TextSize = 9
 SubTitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 SubTitleLabel.Parent = MainFrame
+
+-- Botón "X" para Minimizar
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 22, 0, 22)
+CloseBtn.Position = UDim2.new(1, -30, 0, 10)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(25, 30, 28)
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(180, 190, 185)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 11
+CloseBtn.Parent = MainFrame
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+end)
 
 -- Tarjeta del "BEST EGG"
 local BestEggCard = Instance.new("Frame")
@@ -315,8 +364,8 @@ EggValueLabel.Parent = BestEggCard
 
 -- Lista Desplegable (Debajo de BestEggCard)
 local ListScroll = Instance.new("ScrollingFrame")
-ListScroll.Size = UDim2.new(0.92, 0, 0, 105)
-ListScroll.Position = UDim2.new(0.04, 0, 0, 104)
+ListScroll.Size = UDim2.new(0.92, 0, 0, 110)
+ListScroll.Position = UDim2.new(0.04, 0, 0, 102)
 ListScroll.BackgroundColor3 = Color3.fromRGB(16, 20, 18)
 ListScroll.BorderSizePixel = 0
 ListScroll.Visible = false
@@ -331,19 +380,19 @@ UIList.Padding = UDim.new(0, 2)
 
 -- Contenedor Inferior (Teleguiado + Filtros)
 local BottomContainer = Instance.new("Frame")
-BottomContainer.Size = UDim2.new(1, 0, 0, 105)
+BottomContainer.Size = UDim2.new(1, 0, 0, 110)
 BottomContainer.Position = UDim2.new(0, 0, 0, 105)
 BottomContainer.BackgroundTransparency = 1
 BottomContainer.Parent = MainFrame
 
--- Función para expandir/contraer la lista sin solapamiento
+-- Función expandir/contraer limpia (CERO TRASLAPE)
 ArrowBtn.MouseButton1Click:Connect(function()
     expandedList = not expandedList
     ListScroll.Visible = expandedList
     ArrowBtn.Text = expandedList and "^" or "v"
     if expandedList then
-        MainFrame.Size = UDim2.new(0, 270, 0, 325)
-        BottomContainer.Position = UDim2.new(0, 0, 0, 215)
+        MainFrame.Size = UDim2.new(0, 270, 0, 330)
+        BottomContainer.Position = UDim2.new(0, 0, 0, 218)
     else
         MainFrame.Size = UDim2.new(0, 270, 0, 215)
         BottomContainer.Position = UDim2.new(0, 0, 0, 105)
@@ -478,11 +527,9 @@ local function createRarityPill(name, xPos, yPos)
     
     pill.MouseButton1Click:Connect(function()
         if activeRarityFilter == name then
-            -- Si tocas el mismo, se apaga y APARECEN TODOS
-            activeRarityFilter = nil
+            activeRarityFilter = nil  -- Si vuelves a tocar el mismo, se apaga y APARECEN TODOS
         else
-            -- Si tocas uno diferente, se activa solo ese
-            activeRarityFilter = name
+            activeRarityFilter = name  -- Si tocas otro, se activa solo ese
         end
         updatePillStyles()
         scanEggs()
@@ -556,12 +603,10 @@ task.spawn(function()
         end
         
         if expandedList then
-            -- Limpiar lista previa
             for _, child in pairs(ListScroll:GetChildren()) do
                 if child:IsA("Frame") then child:Destroy() end
             end
             
-            -- Renderizar filas exactamente como Lennon Hub
             for idx, item in ipairs(currentEggs) do
                 if idx <= 6 then
                     local row = Instance.new("Frame")
@@ -701,4 +746,11 @@ task.spawn(function()
     end
 end)
 
-print("¡Lennon Hub Best Egg System (V12 DEFINITIVA) cargado con éxito!")
+pcall(function()
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "LENNON HUB",
+        Text = "Versión V13.0 Oficial cargada con éxito!",
+        Duration = 4
+    })
+end)
+print("¡Lennon Hub Best Egg System (V13.0 OFICIAL) cargado con éxito!")
