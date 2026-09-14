@@ -900,71 +900,63 @@ local function startNewTeleguiado()
     setNoclip(true)
     
     local eggPos = bestEgg.pos
-    local flyAltitude = 225 -- Altura oficial Lennon (225 studs)
+    -- Altura oficial Lennon: Y = 92.9 (exactamente 22 studs sobre el suelo Y=70.6)
+    local flyAltitude = math.max(eggPos.Y + 22.3, 92.9)
     
-    -- 1. Elevar al personaje por el aire fuera del rango de guardias (Y = 225)
+    -- 1. Si el jugador está muy abajo, elevarlo a la altura de vuelo seguro (Y = 92.9)
     local ok = liftCharacterOutOfGround(hrp, flyAltitude)
     if not ok then stopTeleguiado(); return end
     
-    -- 2. Desplazamiento aéreo horizontal hasta el huevo
+    -- 2. Desplazamiento aéreo horizontal hacia el huevo a altura 92.9 (sin irse a las nubes)
     local skyOverEgg = Vector3.new(eggPos.X, flyAltitude, eggPos.Z)
-    ok = tweenToTarget(hrp, skyOverEgg, slowModeActive and 65 or 100)
+    ok = tweenToTarget(hrp, skyOverEgg, slowModeActive and 110 or 200)
     if not ok then stopTeleguiado(); return end
     
-    -- 3. Descenso vertical directo sobre el huevo (tipo ascensor)
-    local hoverEgg = eggPos + Vector3.new(0, 3.5, 0)
+    -- 3. Descenso vertical directo sobre el huevo (tipo ascensor a Y=70.6 + 3)
+    local hoverEgg = Vector3.new(eggPos.X, eggPos.Y + 3.0, eggPos.Z)
     ok = tweenToTarget(hrp, hoverEgg, 65)
     if not ok then stopTeleguiado(); return end
     
-    -- 4. Ejecución del Robo sin congelar el juego (ProximityPrompt y TouchInterest directo)
-    task.wait(0.08)
-    if bestEgg.slotModel then
-        local prompt = bestEgg.slotModel:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if prompt and fireproximityprompt then
-            fireproximityprompt(prompt, 0)
-        end
-    end
-    
-    if bestEgg.hitPart and firetouchinterest then
-        firetouchinterest(hrp, bestEgg.hitPart, 0)
-        task.wait(0.04)
-        firetouchinterest(hrp, bestEgg.hitPart, 1)
-    end
-    
-    local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
-    if slotsFolder then
-        local targetSlot = bestEgg.uid and slotsFolder:FindFirstChild(bestEgg.uid)
-        if targetSlot then
-            local prompt = targetSlot:FindFirstChildWhichIsA("ProximityPrompt", true)
+    -- 4. Robo del huevo (Lennon dura 2 a 3 segundos interactuando para asegurar el robo)
+    local robStart = tick()
+    while (tick() - robStart) < 2.0 and teleguiadoActive do
+        if bestEgg.slotModel then
+            local prompt = bestEgg.slotModel:FindFirstChildWhichIsA("ProximityPrompt", true)
             if prompt and fireproximityprompt then
                 fireproximityprompt(prompt, 0)
             end
-        else
-            for _, slot in pairs(slotsFolder:GetChildren()) do
-                local p = slot:FindFirstChildWhichIsA("ProximityPrompt", true)
-                if p and p.Parent and (p.Parent.Position - eggPos).Magnitude < 10 then
-                    if fireproximityprompt then
-                        fireproximityprompt(p, 0)
-                    end
-                    break
+        end
+        
+        if bestEgg.hitPart and firetouchinterest then
+            firetouchinterest(hrp, bestEgg.hitPart, 0)
+            task.wait(0.04)
+            firetouchinterest(hrp, bestEgg.hitPart, 1)
+        end
+        
+        local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
+        if slotsFolder then
+            local targetSlot = bestEgg.uid and slotsFolder:FindFirstChild(bestEgg.uid)
+            if targetSlot then
+                local prompt = targetSlot:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt and fireproximityprompt then
+                    fireproximityprompt(prompt, 0)
                 end
             end
         end
+        task.wait(0.2)
     end
     
-    task.wait(0.12)
-    
-    -- 5. Ascenso vertical instantáneo a 225 studs (escape anti-guardias)
+    -- 5. Ascenso vertical instantáneo a 92.9 studs (escape aéreo anti-guardias)
     ok = tweenToTarget(hrp, skyOverEgg, 85)
     if not ok then stopTeleguiado(); return end
     
-    -- 6. Regreso seguro a la base por el cielo
+    -- 6. Regreso seguro a la base por el cielo a Y = 92.9
     local home = findMyBase()
     if home then
-        local skyOverHome = Vector3.new(home.X, flyAltitude, home.Z)
-        ok = tweenToTarget(hrp, skyOverHome, slowModeActive and 65 or 100)
+        local skyOverHome = Vector3.new(home.X, math.max(home.Y + 22.3, 92.9), home.Z)
+        ok = tweenToTarget(hrp, skyOverHome, slowModeActive and 110 or 200)
         if ok then
-            -- Descenso suave a la base
+            -- Descenso suave a la base (92.9 -> 70.6)
             local landHome = home + Vector3.new(0, 3.5, 0)
             tweenToTarget(hrp, landHome, 60)
         end
