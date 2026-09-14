@@ -57,7 +57,7 @@ end)
 -- Variables de Estado
 local teleguiadoActive = false
 local loopActive = false
-local slowModeActive = true
+local slowModeActive = false
 local expandedList = false
 local isFlying = false
 local currentTween = nil
@@ -194,6 +194,21 @@ local function scanEggs()
         if ok and fieldData and fieldData.Records then
             local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
             for _, rec in pairs(fieldData.Records) do
+                -- 1. Validar que el huevo esté realmente en el nido y no haya sido robado
+                if rec.State and rec.State ~= "Slot" then
+                    continue
+                end
+                
+                local slotModel = slotsFolder and rec.Uid and slotsFolder:FindFirstChild(rec.Uid)
+                if slotsFolder and not slotModel then
+                    continue -- Si el modelo ya no existe en el nido, ya fue robado!
+                end
+                
+                local prompt = slotModel and slotModel:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt and not prompt.Enabled then
+                    continue -- Si el prompt está apagado, el huevo no está disponible
+                end
+                
                 local cat = tostring(rec.AssetCategory or "")
                 local rarity = petRarityMap[cat] or getRarityFromRecord(rec)
                 
@@ -216,11 +231,7 @@ local function scanEggs()
                     end
                     
                     local eggPos = rec.BoundsCFrame and rec.BoundsCFrame.Position or (rec.BottomCFrame and rec.BottomCFrame.Position)
-                    local hitPart = nil
-                    if slotsFolder and rec.Uid and slotsFolder:FindFirstChild(rec.Uid) then
-                        local model = slotsFolder[rec.Uid]
-                        hitPart = model:FindFirstChild("Hitbox") or model:FindFirstChildWhichIsA("BasePart")
-                    end
+                    local hitPart = slotModel and (slotModel:FindFirstChild("Hitbox") or slotModel:FindFirstChildWhichIsA("BasePart"))
                     
                     local finalName = cat
                     if cat == "Moth" and (rarity == "Cosmic" or string.find(string.lower(tostring(rec.AreaId or "")), "cosmic")) then
@@ -236,6 +247,8 @@ local function scanEggs()
                         valueStr = formatNumber(rate),
                         pos = eggPos,
                         hitPart = hitPart,
+                        slotModel = slotModel,
+                        prompt = prompt,
                         uid = rec.Uid
                     })
                 end
@@ -684,7 +697,7 @@ end)
 task.spawn(function()
     findMyBase()
     while true do
-        task.wait(0.4)
+        task.wait(0.2)
         scanEggs()
         
         if bestEgg then
@@ -913,60 +926,58 @@ local function startNewTeleguiado()
     -- PASO 1: Salir de la base y posicionarse "en medio" (pista central en la línea Safe Zone)
     if math.abs(hrp.Position.Z - (-358)) > 15 then
         local middlePos = Vector3.new(hrp.Position.X, groundY, -358)
-        local ok = tweenToTarget(hrp, middlePos, slowModeActive and 80 or 150)
+        local ok = tweenToTarget(hrp, middlePos, slowModeActive and 150 or 450)
         if not ok then stopTeleguiado(); return end
-        task.wait(0.05)
+        task.wait(0.03)
     end
     
-    -- PASO 2: Deslizarse por la pista central a ras de suelo directo hacia el huevo
-    local approachPos = Vector3.new(eggPos.X, eggPos.Y + 2.0, eggPos.Z)
-    local ok = tweenToTarget(hrp, approachPos, slowModeActive and 120 or 250)
+    -- PASO 2: Deslizarse por la pista central a ras de suelo directo hacia el huevo (alta velocidad)
+    local approachPos = Vector3.new(eggPos.X, eggPos.Y + 1.2, eggPos.Z)
+    local ok = tweenToTarget(hrp, approachPos, slowModeActive and 300 or 1600)
     if not ok then stopTeleguiado(); return end
     
-    -- PASO 3: Robo en el nido (interactuar 2.5 segundos hasta asegurar el huevo)
+    -- PASO 3: Robo en el nido (interacción directa y precisa a ras de suelo)
     local robStart = tick()
     while (tick() - robStart) < 2.5 and teleguiadoActive do
         if hum then hum:UnequipTools() end
         
-        if bestEgg.slotModel then
-            local prompt = bestEgg.slotModel:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if prompt and fireproximityprompt then
-                fireproximityprompt(prompt, 0)
-            end
+        hrp.CFrame = CFrame.new(eggPos.X, eggPos.Y + 1.2, eggPos.Z)
+        hrp.Velocity = Vector3.new(0, 0, 0)
+        
+        local prompt = bestEgg.prompt or (bestEgg.slotModel and bestEgg.slotModel:FindFirstChildWhichIsA("ProximityPrompt", true))
+        if prompt and fireproximityprompt then
+            fireproximityprompt(prompt, prompt.HoldDuration or 0)
+            task.wait(0.04)
+            fireproximityprompt(prompt, 0)
         end
         
         if bestEgg.hitPart and firetouchinterest then
             firetouchinterest(hrp, bestEgg.hitPart, 0)
-            task.wait(0.04)
+            task.wait(0.03)
             firetouchinterest(hrp, bestEgg.hitPart, 1)
         end
         
+        -- Si el huevo ya no está en el nido (ya lo agarramos en brazos), escapar de inmediato sin esperar!
         local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
-        if slotsFolder then
-            local targetSlot = bestEgg.uid and slotsFolder:FindFirstChild(bestEgg.uid)
-            if targetSlot then
-                local prompt = targetSlot:FindFirstChildWhichIsA("ProximityPrompt", true)
-                if prompt and fireproximityprompt then
-                    fireproximityprompt(prompt, 0)
-                end
-            end
+        if slotsFolder and bestEgg.uid and not slotsFolder:FindFirstChild(bestEgg.uid) then
+            break
         end
-        task.wait(0.15)
+        task.wait(0.08)
     end
     
     -- PASO 4: Escape Aéreo con el huevo (elevarse a Y = 92.9 para evitar guardias y bates)
     local skyOverEgg = Vector3.new(eggPos.X, flyAltitude, eggPos.Z)
-    ok = tweenToTarget(hrp, skyOverEgg, 90)
+    ok = tweenToTarget(hrp, skyOverEgg, 180)
     if not ok then stopTeleguiado(); return end
     
-    -- PASO 5: Regreso seguro a la base por el aire a Y = 92.9
+    -- PASO 5: Regreso seguro a la base por el aire a alta velocidad
     if home then
         local skyOverHome = Vector3.new(home.X, flyAltitude, home.Z)
-        ok = tweenToTarget(hrp, skyOverHome, slowModeActive and 120 or 250)
+        ok = tweenToTarget(hrp, skyOverHome, slowModeActive and 300 or 1600)
         if ok then
             -- Descenso suave a la base
             local landHome = home + Vector3.new(0, 3.0, 0)
-            tweenToTarget(hrp, landHome, 65)
+            tweenToTarget(hrp, landHome, 120)
         end
     end
     
@@ -998,8 +1009,8 @@ end)
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
         Title = "LENNON HUB",
-        Text = "Versión V14.1 Oficial cargada con éxito!",
+        Text = "Versión V14.0 Oficial cargada con éxito!",
         Duration = 4
     })
 end)
-print("¡Lennon Hub Best Egg System (V14.1 OFICIAL) cargado con éxito!")
+print("¡Lennon Hub Best Egg System (V14.0 OFICIAL) cargado con éxito!")
