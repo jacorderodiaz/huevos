@@ -31,12 +31,27 @@ pcall(function()
     end
 end)
 
--- Módulos del Juego
+-- Módulos del Juego (100% Nativos)
 local EggState = nil
 local EggRecords = nil
+local AssetEarnings = nil
+local petRarityMap = {}
+
 pcall(function()
     EggState = require(ReplicatedStorage.Client.EggState)
     EggRecords = require(ReplicatedStorage.Shared.Util.EggRecords)
+    AssetEarnings = require(ReplicatedStorage.Shared.Util.AssetEarnings)
+    
+    if AssetEarnings and debug and debug.getupvalues then
+        local ups = debug.getupvalues(AssetEarnings.CatalogRatePerSecond)
+        if ups and ups[2] and ups[2].ByRarity then
+            for rName, pList in pairs(ups[2].ByRarity) do
+                for pName, _ in pairs(pList) do
+                    petRarityMap[tostring(pName)] = tostring(rName)
+                end
+            end
+        end
+    end
 end)
 
 -- Variables de Estado
@@ -57,7 +72,8 @@ local rarityColors = {
     ["Cosmic"] = Color3.fromRGB(145, 60, 240),   -- Púrpura brillante
     ["Secret"] = Color3.fromRGB(160, 160, 170),  -- Gris plata
     ["Eternal"] = Color3.fromRGB(230, 30, 140),  -- Magenta brillante
-    ["Divine"] = Color3.fromRGB(255, 215, 0)     -- Dorado oro
+    ["Divine"] = Color3.fromRGB(255, 215, 0),    -- Dorado oro
+    ["Mythic"] = Color3.fromRGB(240, 50, 70)     -- Rojo mítico
 }
 
 local rarityBgActive = {
@@ -168,72 +184,71 @@ local function scanEggs()
         if active then anySelected = true; break end
     end
     
-    -- 1. Intentar leer directo de la memoria del motor (100% idéntico a Lennon)
-    local state, funcs = getLennonEngineState()
-    if state and state.eggs then
-        for _, egg in pairs(state.eggs) do
-            local rarity = egg.RarityName or "Cosmic"
-            local isAllowed = (not anySelected) or selectedRarities[rarity]
-            if isAllowed then
-                local gen = egg.Generation or (egg.BaseRate and egg.Scale and (egg.BaseRate * egg.Scale)) or 0
-                local str = formatNumber(gen)
-                local pos = egg.Position or (egg.BottomCFrame and egg.BottomCFrame.Position) or Vector3.new(0,0,0)
-                
-                table.insert(found, {
-                    name = egg.Name or "Egg",
-                    rarity = rarity,
-                    price = gen,
-                    valueStr = str,
-                    pos = pos,
-                    hitPart = nil,
-                    uid = egg.Uid
-                })
-            end
-        end
-    elseif state and state.filteredEggs then
-        for _, egg in ipairs(state.filteredEggs) do
-            local gen = egg.Generation or 0
-            local str = formatNumber(gen)
-            local pos = egg.Position or (egg.BottomCFrame and egg.BottomCFrame.Position) or Vector3.new(0,0,0)
-            table.insert(found, {
-                name = egg.Name or "Egg",
-                rarity = egg.RarityName or "Cosmic",
-                price = gen,
-                valueStr = str,
-                pos = pos,
-                hitPart = nil,
-                uid = egg.Uid
-            })
-        end
-    end
-    
-    -- 2. Fallback si Lennon no está presente: lectura nativa del juego
-    if #found == 0 and EggState then
+    -- 1. MOTOR NATIVO PRINCIPAL (100% Autónomo del juego, sin depender de nadie)
+    if EggState then
         local ok, fieldData = pcall(function() return EggState.ReadFieldEggs() end)
         if ok and fieldData and fieldData.Records then
             local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
             for _, rec in pairs(fieldData.Records) do
-                local rarity = getRarityFromRecord(rec)
+                local cat = tostring(rec.AssetCategory or "")
+                local rarity = petRarityMap[cat] or getRarityFromRecord(rec)
+                
                 local isAllowed = (not anySelected) or selectedRarities[rarity]
+                
                 if isAllowed then
-                    local gen = rec.Generation or ((rec.EarningRate or rec.BaseRate or 10000000) * (rec.AssetScale or rec.Scale or 1))
-                    local petName = rec.AssetCategory or (EggRecords and EggRecords.DisplayName and EggRecords.DisplayName(rec)) or "Egg"
+                    local rate = 0
+                    if AssetEarnings then
+                        local itemData = {
+                            Category = rec.AssetCategory,
+                            Scale = rec.AssetScale or 1,
+                            Mutations = rec.Mutations or {}
+                        }
+                        local sok, srate = pcall(function() return AssetEarnings.RatePerSecond(itemData) end)
+                        if sok and srate and srate > 0 then rate = srate end
+                    end
+                    
+                    if not rate or rate == 0 then
+                        rate = rec.Generation or ((rec.EarningRate or rec.BaseRate or 10000000) * (rec.AssetScale or rec.Scale or 1))
+                    end
+                    
                     local eggPos = rec.BoundsCFrame and rec.BoundsCFrame.Position or (rec.BottomCFrame and rec.BottomCFrame.Position)
                     local hitPart = nil
                     if slotsFolder and rec.Uid and slotsFolder:FindFirstChild(rec.Uid) then
                         local model = slotsFolder[rec.Uid]
                         hitPart = model:FindFirstChild("Hitbox") or model:FindFirstChildWhichIsA("BasePart")
                     end
+                    
                     table.insert(found, {
-                        name = petName,
+                        name = cat,
                         rarity = rarity,
-                        price = gen,
-                        valueStr = formatNumber(gen),
+                        price = rate,
+                        valueStr = formatNumber(rate),
                         pos = eggPos,
                         hitPart = hitPart,
                         uid = rec.Uid
                     })
                 end
+            end
+        end
+    end
+    
+    -- 2. Fallback secundario si la pista estuviera vacía en ese milisegundo
+    if #found == 0 then
+        local state = getLennonEngineState()
+        if state and state.filteredEggs then
+            for _, egg in ipairs(state.filteredEggs) do
+                local gen = egg.Generation or 0
+                local str = formatNumber(gen)
+                local pos = egg.Position or (egg.BottomCFrame and egg.BottomCFrame.Position) or Vector3.new(0,0,0)
+                table.insert(found, {
+                    name = egg.Name or "Egg",
+                    rarity = egg.RarityName or "Cosmic",
+                    price = gen,
+                    valueStr = str,
+                    pos = pos,
+                    hitPart = nil,
+                    uid = egg.Uid
+                })
             end
         end
     end
