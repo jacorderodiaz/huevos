@@ -59,6 +59,10 @@ local teleguiadoActive = false
 local loopActive = false
 local slowModeActive = true
 local expandedList = false
+local isFlying = false
+local currentTween = nil
+local noclipConn = nil
+local stopTeleguiado = nil
 
 -- Filtros de Rarezas (Por defecto solo Cosmic activo, idéntico a Lennon Hub)
 local selectedRarities = {
@@ -111,21 +115,21 @@ local myBasePosition = nil
 
 -- Base del Jugador
 local function findMyBase()
-    if myBasePosition then return myBasePosition end
-    local myPlot = workspace:FindFirstChild(LocalPlayer.Name)
+    local myPlot = workspace:FindFirstChild(LocalPlayer.Name) or workspace:FindFirstChild(LocalPlayer.DisplayName)
     if myPlot and myPlot:IsA("Model") then
-        myBasePosition = myPlot:GetPivot().Position + Vector3.new(0, 4, 0)
-        return myBasePosition
+        return myPlot:GetPivot().Position + Vector3.new(0, 4, 0)
     end
-    local plots = workspace:FindFirstChild("Plots")
+    local plots = workspace:FindFirstChild("Plots") or workspace:FindFirstChild("Bases") or workspace:FindFirstChild("PlotModels")
     if plots then
         for _, p in pairs(plots:GetChildren()) do
-            if string.find(string.lower(p.Name), string.lower(LocalPlayer.Name)) then
-                myBasePosition = (p:IsA("Model") and p:GetPivot().Position or p.Position) + Vector3.new(0, 4, 0)
-                return myBasePosition
+            local ownerVal = p:FindFirstChild("Owner") or p:FindFirstChild("Player") or p:GetAttribute("Owner")
+            if (ownerVal and (ownerVal == LocalPlayer.Name or (typeof(ownerVal) == "Instance" and ownerVal.Value == LocalPlayer.Name)))
+                or string.find(string.lower(p.Name), string.lower(LocalPlayer.Name)) then
+                return (p:IsA("Model") and p:GetPivot().Position or p.Position) + Vector3.new(0, 4, 0)
             end
         end
     end
+    if myBasePosition then return myBasePosition end
     if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
         myBasePosition = LocalPlayer.Character.HumanoidRootPart.Position
     end
@@ -218,8 +222,15 @@ local function scanEggs()
                         hitPart = model:FindFirstChild("Hitbox") or model:FindFirstChildWhichIsA("BasePart")
                     end
                     
+                    local finalName = cat
+                    if cat == "Moth" and (rarity == "Cosmic" or string.find(string.lower(tostring(rec.AreaId or "")), "cosmic")) then
+                        finalName = "Sacred Moth"
+                    elseif cat == "Peacock" and (rarity == "Cosmic" or string.find(string.lower(tostring(rec.AreaId or "")), "cosmic")) then
+                        finalName = "Holy Peacock"
+                    end
+                    
                     table.insert(found, {
-                        name = cat,
+                        name = finalName,
                         rarity = rarity,
                         price = rate,
                         valueStr = formatNumber(rate),
@@ -569,6 +580,7 @@ SwitchBg.MouseButton1Click:Connect(function()
         SwitchBg.BackgroundColor3 = Color3.fromRGB(40, 45, 42)
         SwitchDot.Position = UDim2.new(0, 2, 0, 2)
         SwitchDot.BackgroundColor3 = Color3.fromRGB(150, 155, 150)
+        if stopTeleguiado then stopTeleguiado() end
     end
 end)
 
@@ -748,83 +760,236 @@ task.spawn(function()
 end)
 
 -- ========================================================
--- 4. TELEGUIADO AÉREO ANTI-GUARDIAS Y RETORNO A BASE
+-- 4. TELEGUIADO AÉREO ANTI-GUARDIAS (ESTILO LENNON V14)
 -- ========================================================
-RunService.Stepped:Connect(function()
-    if teleguiadoActive and LocalPlayer.Character then
-        for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
+local function applyAntiRagdoll(char)
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        if hum:GetState() == Enum.HumanoidStateType.Ragdoll or hum:GetState() == Enum.HumanoidStateType.FallingDown then
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+        end
+    end
+    for _, sc in pairs(char:GetDescendants()) do
+        if sc:IsA("Script") or sc:IsA("LocalScript") then
+            local n = string.lower(sc.Name)
+            if string.find(n, "ragdoll") or string.find(n, "fall") then
+                sc.Disabled = true
             end
         end
     end
-end)
+end
+
+local function setBodyVelocity(hrp, active)
+    if not hrp or not hrp.Parent then return end
+    local bv = hrp:FindFirstChild("TeleguiadoBV")
+    if active then
+        if not bv then
+            bv = Instance.new("BodyVelocity")
+            bv.Name = "TeleguiadoBV"
+            bv.Parent = hrp
+        end
+        bv.Velocity = Vector3.new(0, 0, 0)
+        bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+    else
+        if bv then
+            bv:Destroy()
+        end
+    end
+end
+
+local function setNoclip(active)
+    if noclipConn then
+        noclipConn:Disconnect()
+        noclipConn = nil
+    end
+    if active then
+        noclipConn = RunService.Stepped:Connect(function()
+            if LocalPlayer.Character then
+                for _, part in pairs(LocalPlayer.Character:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+    else
+        if LocalPlayer.Character then
+            for _, part in pairs(LocalPlayer.Character:GetChildren()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                    part.CanCollide = true
+                end
+            end
+        end
+    end
+end
+
+stopTeleguiado = function()
+    teleguiadoActive = false
+    isFlying = false
+    if currentTween then
+        pcall(function() currentTween:Cancel() end)
+        currentTween = nil
+    end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        setBodyVelocity(hrp, false)
+        hrp.Velocity = Vector3.new(0, 0, 0)
+        hrp.RotVelocity = Vector3.new(0, 0, 0)
+    end
+    setNoclip(false)
+end
+
+local function tweenToTarget(hrp, targetPos, speed)
+    if not hrp or not hrp.Parent or not teleguiadoActive then return false end
+    speed = speed or (slowModeActive and 65 or 100)
+    local dist = (hrp.Position - targetPos).Magnitude
+    local duration = math.max(dist / speed, 0.05)
+    
+    local targetCFrame = CFrame.new(targetPos)
+    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
+    local tw = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
+    currentTween = tw
+    tw:Play()
+    
+    local completed = false
+    local conn
+    conn = tw.Completed:Connect(function()
+        completed = true
+    end)
+    
+    while not completed and teleguiadoActive do
+        task.wait(0.03)
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hrp.Parent or not hum or hum.Health <= 0 then
+            tw:Cancel()
+            if conn then conn:Disconnect() end
+            return false
+        end
+    end
+    if conn then conn:Disconnect() end
+    
+    if not teleguiadoActive then
+        tw:Cancel()
+        return false
+    end
+    return true
+end
+
+local function liftCharacterOutOfGround(hrp, flyAltitude)
+    flyAltitude = flyAltitude or 225
+    local skyStart = Vector3.new(hrp.Position.X, flyAltitude, hrp.Position.Z)
+    return tweenToTarget(hrp, skyStart, 85)
+end
+
+local function startNewTeleguiado()
+    if isFlying or not teleguiadoActive then return end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum or hum.Health <= 0 then return end
+    if not bestEgg or not bestEgg.pos then return end
+    
+    isFlying = true
+    applyAntiRagdoll(char)
+    setBodyVelocity(hrp, true)
+    setNoclip(true)
+    
+    local eggPos = bestEgg.pos
+    local flyAltitude = 225 -- Altura oficial Lennon (225 studs)
+    
+    -- 1. Elevar al personaje por el aire fuera del rango de guardias (Y = 225)
+    local ok = liftCharacterOutOfGround(hrp, flyAltitude)
+    if not ok then stopTeleguiado(); return end
+    
+    -- 2. Desplazamiento aéreo horizontal hasta el huevo
+    local skyOverEgg = Vector3.new(eggPos.X, flyAltitude, eggPos.Z)
+    ok = tweenToTarget(hrp, skyOverEgg, slowModeActive and 65 or 100)
+    if not ok then stopTeleguiado(); return end
+    
+    -- 3. Descenso vertical directo sobre el huevo (tipo ascensor)
+    local hoverEgg = eggPos + Vector3.new(0, 3.5, 0)
+    ok = tweenToTarget(hrp, hoverEgg, 65)
+    if not ok then stopTeleguiado(); return end
+    
+    -- 4. Ejecución del Robo sin congelar el juego (ProximityPrompt y TouchInterest directo)
+    task.wait(0.08)
+    if bestEgg.slotModel then
+        local prompt = bestEgg.slotModel:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt and fireproximityprompt then
+            fireproximityprompt(prompt, 0)
+        end
+    end
+    
+    if bestEgg.hitPart and firetouchinterest then
+        firetouchinterest(hrp, bestEgg.hitPart, 0)
+        task.wait(0.04)
+        firetouchinterest(hrp, bestEgg.hitPart, 1)
+    end
+    
+    local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
+    if slotsFolder then
+        local targetSlot = bestEgg.uid and slotsFolder:FindFirstChild(bestEgg.uid)
+        if targetSlot then
+            local prompt = targetSlot:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if prompt and fireproximityprompt then
+                fireproximityprompt(prompt, 0)
+            end
+        else
+            for _, slot in pairs(slotsFolder:GetChildren()) do
+                local p = slot:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if p and p.Parent and (p.Parent.Position - eggPos).Magnitude < 10 then
+                    if fireproximityprompt then
+                        fireproximityprompt(p, 0)
+                    end
+                    break
+                end
+            end
+        end
+    end
+    
+    task.wait(0.12)
+    
+    -- 5. Ascenso vertical instantáneo a 225 studs (escape anti-guardias)
+    ok = tweenToTarget(hrp, skyOverEgg, 85)
+    if not ok then stopTeleguiado(); return end
+    
+    -- 6. Regreso seguro a la base por el cielo
+    local home = findMyBase()
+    if home then
+        local skyOverHome = Vector3.new(home.X, flyAltitude, home.Z)
+        ok = tweenToTarget(hrp, skyOverHome, slowModeActive and 65 or 100)
+        if ok then
+            -- Descenso suave a la base
+            local landHome = home + Vector3.new(0, 3.5, 0)
+            tweenToTarget(hrp, landHome, 60)
+        end
+    end
+    
+    -- 7. Limpieza al aterrizar
+    setBodyVelocity(hrp, false)
+    setNoclip(false)
+    isFlying = false
+    
+    if not loopActive then
+        teleguiadoActive = false
+        SwitchBg.BackgroundColor3 = Color3.fromRGB(40, 45, 42)
+        SwitchDot.Position = UDim2.new(0, 2, 0, 2)
+        SwitchDot.BackgroundColor3 = Color3.fromRGB(150, 155, 150)
+    end
+end
 
 task.spawn(function()
     while true do
-        task.wait(0.1)
-        if teleguiadoActive and bestEgg and bestEgg.pos then
-            local char = LocalPlayer.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            local hum = char and char:FindFirstChild("Humanoid")
-            
-            if hrp and hum and hum.Health > 0 then
-                local eggPos = bestEgg.pos
-                local safeHoverPos = eggPos + Vector3.new(0, 4.5, 0)
-                local horizontalDist = (Vector3.new(eggPos.X, 0, eggPos.Z) - Vector3.new(hrp.Position.X, 0, hrp.Position.Z)).Magnitude
-                
-                if horizontalDist > 4 then
-                    local skyTarget = Vector3.new(eggPos.X, eggPos.Y + 20, eggPos.Z)
-                    local dir = (skyTarget - hrp.Position).Unit
-                    
-                    if slowModeActive then
-                        hrp.Velocity = dir * 90
-                        hrp.CFrame = CFrame.new(hrp.Position, skyTarget)
-                    else
-                        hrp.CFrame = CFrame.new(skyTarget)
-                    end
-                else
-                    hrp.CFrame = CFrame.new(safeHoverPos)
-                    hrp.Velocity = Vector3.new(0, 0, 0)
-                    
-                    if bestEgg.hitPart and firetouchinterest then
-                        firetouchinterest(hrp, bestEgg.hitPart, 0)
-                        task.wait(0.05)
-                        firetouchinterest(hrp, bestEgg.hitPart, 1)
-                    end
-                    
-                    for _, p in pairs(workspace:GetDescendants()) do
-                        if p:IsA("ProximityPrompt") and p.Parent and p.Parent:IsA("BasePart") then
-                            if (p.Parent.Position - eggPos).Magnitude < 8 then
-                                if fireproximityprompt then
-                                    fireproximityprompt(p, 0)
-                                end
-                                break
-                            end
-                        end
-                    end
-                    
-                    -- Escape aéreo anti-guardias
-                    hrp.CFrame = hrp.CFrame + Vector3.new(0, 25, 0)
-                    
-                    -- Regreso a base
-                    local home = findMyBase()
-                    if home then
-                        task.wait(0.2)
-                        local skyHome = Vector3.new(home.X, hrp.Position.Y, home.Z)
-                        hrp.CFrame = CFrame.new(skyHome)
-                        task.wait(0.3)
-                        hrp.CFrame = CFrame.new(home)
-                    end
-                    
-                    if not loopActive then
-                        teleguiadoActive = false
-                        SwitchBg.BackgroundColor3 = Color3.fromRGB(40, 45, 42)
-                        SwitchDot.Position = UDim2.new(0, 2, 0, 2)
-                        SwitchDot.BackgroundColor3 = Color3.fromRGB(150, 155, 150)
-                    end
-                    task.wait(1.5)
-                end
+        task.wait(0.2)
+        if teleguiadoActive and not isFlying and bestEgg and bestEgg.pos then
+            pcall(startNewTeleguiado)
+            if loopActive and teleguiadoActive then
+                task.wait(1.2)
             end
         end
     end
