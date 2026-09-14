@@ -45,12 +45,12 @@ local loopActive = false
 local slowModeActive = true
 local expandedList = false
 
--- Filtros de Rarezas Seleccionables Libremente
+-- Filtros de Rarezas (Por defecto solo Cosmic activo, idéntico a Lennon Hub)
 local selectedRarities = {
     ["Cosmic"] = true,
-    ["Secret"] = true,
-    ["Eternal"] = true,
-    ["Divine"] = true
+    ["Secret"] = false,
+    ["Eternal"] = false,
+    ["Divine"] = false
 }
 
 local rarityColors = {
@@ -134,17 +134,29 @@ local function formatNumber(num)
     return tostring(num)
 end
 
+local function parsePerSecond(text)
+    if not text then return 0, "0" end
+    local clean = string.gsub(text, "[%$%/s]", "")
+    local num = tonumber(string.match(clean, "%d+%.?%d*")) or 0
+    local mult = 1
+    if string.find(clean, "T") or string.find(clean, "t") then
+        mult = 1e12
+    elseif string.find(clean, "B") or string.find(clean, "b") then
+        mult = 1e9
+    elseif string.find(clean, "M") or string.find(clean, "m") then
+        mult = 1e6
+    elseif string.find(clean, "K") or string.find(clean, "k") then
+        mult = 1e3
+    end
+    return num * mult, clean
+end
+
 -- ========================================================
--- 1. DETECTOR OFICIAL EN VIVO DE LA PISTA
+-- 1. DETECTOR EXACTO DE CLIENTRENDEREDASSETS
 -- ========================================================
 local function scanEggs()
-    if not EggState or not EggRecords then return end
-    
-    local ok, fieldData = pcall(function() return EggState.ReadFieldEggs() end)
-    if not ok or not fieldData or not fieldData.Records then return end
-    
     local found = {}
-    local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
+    local myUserId = tostring(LocalPlayer.UserId)
     
     -- Comprobar si hay al menos una rareza seleccionada
     local anySelected = false
@@ -152,39 +164,83 @@ local function scanEggs()
         if active then anySelected = true; break end
     end
     
-    for _, rec in pairs(fieldData.Records) do
-        local rarity = getRarityFromRecord(rec)
-        
-        -- Si ninguna está seleccionada -> MODO TODOS
-        -- Si hay alguna seleccionada -> filtrar por las activas
-        local isAllowed = (not anySelected) or selectedRarities[rarity]
-        
-        if isAllowed then
-            local price = 0
-            pcall(function() price = EggRecords.SellPrice(rec) end)
-            
-            local petName = rec.AssetCategory or EggRecords.DisplayName(rec) or "Egg"
-            local eggPos = rec.BoundsCFrame and rec.BoundsCFrame.Position or (rec.BottomCFrame and rec.BottomCFrame.Position)
-            
-            local hitPart = nil
-            if slotsFolder and rec.Uid and slotsFolder:FindFirstChild(rec.Uid) then
-                local model = slotsFolder[rec.Uid]
-                hitPart = model:FindFirstChild("Hitbox") or model:FindFirstChildWhichIsA("BasePart")
+    -- 1. Escanear ClientRenderedAssets (Huevos y Mascotas de bases ajenas)
+    local assets = workspace:FindFirstChild("ClientRenderedAssets")
+    if assets then
+        for _, child in pairs(assets:GetChildren()) do
+            local ownerId = tostring(child:GetAttribute("OwnerUserId") or "")
+            -- Ignorar nuestra propia base
+            if ownerId ~= myUserId then
+                local dataGui = child:FindFirstChild("Data")
+                if dataGui and dataGui:IsA("BillboardGui") then
+                    local nameLabel = dataGui:FindFirstChild("DisplayName")
+                    local oddsLabel = dataGui:FindFirstChild("Odds")
+                    local perSecLabel = dataGui:FindFirstChild("PerSecond")
+                    
+                    if nameLabel and oddsLabel and perSecLabel then
+                        local petName = nameLabel.Text
+                        local rarity = oddsLabel.Text
+                        if rarity == "" or not rarity then rarity = "Cosmic" end
+                        
+                        local isAllowed = (not anySelected) or selectedRarities[rarity]
+                        
+                        if isAllowed then
+                            local numVal, cleanStr = parsePerSecond(perSecLabel.Text)
+                            if numVal > 0 then
+                                local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChild("CENTER") or child.PrimaryPart or child:FindFirstChildWhichIsA("BasePart")
+                                local pos = root and root.Position or Vector3.new(0, 0, 0)
+                                
+                                table.insert(found, {
+                                    name = petName,
+                                    rarity = rarity,
+                                    price = numVal,
+                                    valueStr = cleanStr,
+                                    pos = pos,
+                                    hitPart = root,
+                                    uid = child.Name,
+                                    model = child
+                                })
+                            end
+                        end
+                    end
+                end
             end
-            
-            table.insert(found, {
-                name = petName,
-                rarity = rarity,
-                price = price,
-                valueStr = formatNumber(price),
-                pos = eggPos,
-                hitPart = hitPart,
-                uid = rec.Uid
-            })
         end
     end
     
-    -- Ordenar de mayor a menor precio
+    -- 2. Si no hay en ClientRenderedAssets, fallback a FieldEggs de la pista
+    if #found == 0 and EggState and EggRecords then
+        local ok, fieldData = pcall(function() return EggState.ReadFieldEggs() end)
+        if ok and fieldData and fieldData.Records then
+            local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
+            for _, rec in pairs(fieldData.Records) do
+                local rarity = getRarityFromRecord(rec)
+                local isAllowed = (not anySelected) or selectedRarities[rarity]
+                if isAllowed then
+                    local price = 0
+                    pcall(function() price = EggRecords.SellPrice(rec) end)
+                    local petName = rec.AssetCategory or EggRecords.DisplayName(rec) or "Egg"
+                    local eggPos = rec.BoundsCFrame and rec.BoundsCFrame.Position or (rec.BottomCFrame and rec.BottomCFrame.Position)
+                    local hitPart = nil
+                    if slotsFolder and rec.Uid and slotsFolder:FindFirstChild(rec.Uid) then
+                        local model = slotsFolder[rec.Uid]
+                        hitPart = model:FindFirstChild("Hitbox") or model:FindFirstChildWhichIsA("BasePart")
+                    end
+                    table.insert(found, {
+                        name = petName,
+                        rarity = rarity,
+                        price = price,
+                        valueStr = formatNumber(price),
+                        pos = eggPos,
+                        hitPart = hitPart,
+                        uid = rec.Uid
+                    })
+                end
+            end
+        end
+    end
+    
+    -- Ordenar de mayor a menor valor
     table.sort(found, function(a, b)
         return a.price > b.price
     end)
