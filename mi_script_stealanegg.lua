@@ -923,20 +923,30 @@ local function startNewTeleguiado()
     local groundY = hrp.Position.Y
     local flyAltitude = math.max(eggPos.Y + 22.3, 92.9)
     
-    -- PASO 1: Salir de la base y posicionarse "en medio" (pista central en la línea Safe Zone)
+    -- PASO 1: Salir de la base hacia la pista central ("en medio") a ras de suelo
     if math.abs(hrp.Position.Z - (-358)) > 15 then
         local middlePos = Vector3.new(hrp.Position.X, groundY, -358)
-        local ok = tweenToTarget(hrp, middlePos, slowModeActive and 150 or 450)
+        local ok = tweenToTarget(hrp, middlePos, slowModeActive and 120 or 250)
         if not ok then stopTeleguiado(); return end
         task.wait(0.03)
     end
     
-    -- PASO 2: Deslizarse por la pista central a ras de suelo directo hacia el huevo (alta velocidad)
-    local approachPos = Vector3.new(eggPos.X, eggPos.Y + 1.2, eggPos.Z)
-    local ok = tweenToTarget(hrp, approachPos, slowModeActive and 300 or 1600)
+    -- PASO 2: Elevarse a la altura segura de vuelo Y = 92.9 (fuera del alcance de guardias y bates)
+    local skyStart = Vector3.new(hrp.Position.X, flyAltitude, hrp.Position.Z)
+    local ok = tweenToTarget(hrp, skyStart, 120)
     if not ok then stopTeleguiado(); return end
     
-    -- PASO 3: Robo en el nido (interacción directa y precisa a ras de suelo)
+    -- PASO 3: Vuelo seguro por el aire hasta quedar justo encima del huevo (sin chocar con nada)
+    local skyOverEgg = Vector3.new(eggPos.X, flyAltitude, eggPos.Z)
+    ok = tweenToTarget(hrp, skyOverEgg, slowModeActive and 220 or 450)
+    if not ok then stopTeleguiado(); return end
+    
+    -- PASO 4: Descenso vertical tipo ascensor directo sobre el nido
+    local hoverEgg = Vector3.new(eggPos.X, eggPos.Y + 1.2, eggPos.Z)
+    ok = tweenToTarget(hrp, hoverEgg, 85)
+    if not ok then stopTeleguiado(); return end
+    
+    -- PASO 5: Robo en el nido (activación directa de proximity prompt y touch)
     local robStart = tick()
     while (tick() - robStart) < 2.5 and teleguiadoActive do
         if hum then hum:UnequipTools() end
@@ -957,7 +967,7 @@ local function startNewTeleguiado()
             firetouchinterest(hrp, bestEgg.hitPart, 1)
         end
         
-        -- Si el huevo ya no está en el nido (ya lo agarramos en brazos), escapar de inmediato sin esperar!
+        -- Si el huevo ya no está en el nido (ya lo tenemos en brazos!), escapar de inmediato!
         local slotsFolder = workspace:FindFirstChild("AreaEggSlotsClient")
         if slotsFolder and bestEgg.uid and not slotsFolder:FindFirstChild(bestEgg.uid) then
             break
@@ -965,19 +975,18 @@ local function startNewTeleguiado()
         task.wait(0.08)
     end
     
-    -- PASO 4: Escape Aéreo con el huevo (elevarse a Y = 92.9 para evitar guardias y bates)
-    local skyOverEgg = Vector3.new(eggPos.X, flyAltitude, eggPos.Z)
-    ok = tweenToTarget(hrp, skyOverEgg, 180)
+    -- PASO 6: Ascenso vertical instantáneo a 92.9 studs (escape aéreo anti-guardias)
+    ok = tweenToTarget(hrp, skyOverEgg, 120)
     if not ok then stopTeleguiado(); return end
     
-    -- PASO 5: Regreso seguro a la base por el aire a alta velocidad
+    -- PASO 7: Regreso seguro a la base por el aire a Y = 92.9
     if home then
         local skyOverHome = Vector3.new(home.X, flyAltitude, home.Z)
-        ok = tweenToTarget(hrp, skyOverHome, slowModeActive and 300 or 1600)
+        ok = tweenToTarget(hrp, skyOverHome, slowModeActive and 220 or 450)
         if ok then
             -- Descenso suave a la base
             local landHome = home + Vector3.new(0, 3.0, 0)
-            tweenToTarget(hrp, landHome, 120)
+            tweenToTarget(hrp, landHome, 80)
         end
     end
     
