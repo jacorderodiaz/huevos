@@ -895,31 +895,39 @@ local function startNewTeleguiado()
     if not bestEgg or not bestEgg.pos then return end
     
     isFlying = true
+    
+    -- Desequipar herramientas/bate para no trabarse en la Safe Zone
+    if hum then
+        hum:UnequipTools()
+    end
+    
     applyAntiRagdoll(char)
     setBodyVelocity(hrp, true)
     setNoclip(true)
     
     local eggPos = bestEgg.pos
-    -- Altura oficial Lennon: Y = 92.9 (exactamente 22 studs sobre el suelo Y=70.6)
+    local home = findMyBase()
+    local groundY = hrp.Position.Y
     local flyAltitude = math.max(eggPos.Y + 22.3, 92.9)
     
-    -- 1. Si el jugador está muy abajo, elevarlo a la altura de vuelo seguro (Y = 92.9)
-    local ok = liftCharacterOutOfGround(hrp, flyAltitude)
+    -- PASO 1: Salir de la base y posicionarse "en medio" (pista central en la línea Safe Zone)
+    if math.abs(hrp.Position.Z - (-358)) > 15 then
+        local middlePos = Vector3.new(hrp.Position.X, groundY, -358)
+        local ok = tweenToTarget(hrp, middlePos, slowModeActive and 80 or 150)
+        if not ok then stopTeleguiado(); return end
+        task.wait(0.05)
+    end
+    
+    -- PASO 2: Deslizarse por la pista central a ras de suelo directo hacia el huevo
+    local approachPos = Vector3.new(eggPos.X, eggPos.Y + 2.0, eggPos.Z)
+    local ok = tweenToTarget(hrp, approachPos, slowModeActive and 120 or 250)
     if not ok then stopTeleguiado(); return end
     
-    -- 2. Desplazamiento aéreo horizontal hacia el huevo a altura 92.9 (sin irse a las nubes)
-    local skyOverEgg = Vector3.new(eggPos.X, flyAltitude, eggPos.Z)
-    ok = tweenToTarget(hrp, skyOverEgg, slowModeActive and 110 or 200)
-    if not ok then stopTeleguiado(); return end
-    
-    -- 3. Descenso vertical directo sobre el huevo (tipo ascensor a Y=70.6 + 3)
-    local hoverEgg = Vector3.new(eggPos.X, eggPos.Y + 3.0, eggPos.Z)
-    ok = tweenToTarget(hrp, hoverEgg, 65)
-    if not ok then stopTeleguiado(); return end
-    
-    -- 4. Robo del huevo (Lennon dura 2 a 3 segundos interactuando para asegurar el robo)
+    -- PASO 3: Robo en el nido (interactuar 2.5 segundos hasta asegurar el huevo)
     local robStart = tick()
-    while (tick() - robStart) < 2.0 and teleguiadoActive do
+    while (tick() - robStart) < 2.5 and teleguiadoActive do
+        if hum then hum:UnequipTools() end
+        
         if bestEgg.slotModel then
             local prompt = bestEgg.slotModel:FindFirstChildWhichIsA("ProximityPrompt", true)
             if prompt and fireproximityprompt then
@@ -943,22 +951,22 @@ local function startNewTeleguiado()
                 end
             end
         end
-        task.wait(0.2)
+        task.wait(0.15)
     end
     
-    -- 5. Ascenso vertical instantáneo a 92.9 studs (escape aéreo anti-guardias)
-    ok = tweenToTarget(hrp, skyOverEgg, 85)
+    -- PASO 4: Escape Aéreo con el huevo (elevarse a Y = 92.9 para evitar guardias y bates)
+    local skyOverEgg = Vector3.new(eggPos.X, flyAltitude, eggPos.Z)
+    ok = tweenToTarget(hrp, skyOverEgg, 90)
     if not ok then stopTeleguiado(); return end
     
-    -- 6. Regreso seguro a la base por el cielo a Y = 92.9
-    local home = findMyBase()
+    -- PASO 5: Regreso seguro a la base por el aire a Y = 92.9
     if home then
-        local skyOverHome = Vector3.new(home.X, math.max(home.Y + 22.3, 92.9), home.Z)
-        ok = tweenToTarget(hrp, skyOverHome, slowModeActive and 110 or 200)
+        local skyOverHome = Vector3.new(home.X, flyAltitude, home.Z)
+        ok = tweenToTarget(hrp, skyOverHome, slowModeActive and 120 or 250)
         if ok then
-            -- Descenso suave a la base (92.9 -> 70.6)
-            local landHome = home + Vector3.new(0, 3.5, 0)
-            tweenToTarget(hrp, landHome, 60)
+            -- Descenso suave a la base
+            local landHome = home + Vector3.new(0, 3.0, 0)
+            tweenToTarget(hrp, landHome, 65)
         end
     end
     
@@ -990,8 +998,8 @@ end)
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
         Title = "LENNON HUB",
-        Text = "Versión V14.0 Oficial cargada con éxito!",
+        Text = "Versión V14.1 Oficial cargada con éxito!",
         Duration = 4
     })
 end)
-print("¡Lennon Hub Best Egg System (V14.0 OFICIAL) cargado con éxito!")
+print("¡Lennon Hub Best Egg System (V14.1 OFICIAL) cargado con éxito!")
